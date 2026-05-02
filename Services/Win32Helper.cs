@@ -37,6 +37,13 @@ internal static class Win32Helper
         DwmSetWindowAttribute(hwnd, 33, ref pref, sizeof(int));
     }
 
+    public static void RemoveBorder(IntPtr hwnd)
+    {
+        // DWMWA_BORDER_COLOR = 34, DWMWA_COLOR_NONE = 0xFFFFFFFE
+        int color = unchecked((int)0xFFFFFFFE);
+        DwmSetWindowAttribute(hwnd, 34, ref color, sizeof(int));
+    }
+
     public static void HideFromAltTab(IntPtr hwnd)
     {
         const int GWL_EXSTYLE = -20;

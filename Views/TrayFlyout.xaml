@@ -7,11 +7,8 @@
 
     <Grid x:Name="Root"
           Background="Transparent"
-          Padding="12"
-          CornerRadius="8"
-          MinWidth="240">
+          Padding="12">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
@@ -108,14 +105,5 @@
                     Content="Snooze 15m"
                     Click="OnSnooze15"/>
         </Grid>
-
-        <!-- Demo toggle -->
-        <ToggleSwitch x:Name="DemoToggle"
-                      Grid.Row="4"
-                      Margin="0,8,0,0"
-                      OnContent="Demo mode (fast cycle)"
-                      OffContent="Demo mode"
-                      FontSize="11"
-                      Toggled="OnDemoToggled"/>
     </Grid>
 </Window>

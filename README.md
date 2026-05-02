@@ -7,7 +7,7 @@ Built with **WinUI 3** (Windows App SDK) — same stack as PowerToys and the Win
 ## Surfaces
 
 1. **Tray icon** — the only persistent UI. Shows minutes left in green, switches to yellow under 2 min, pulses yellow during the 5-second pre-ping, eye glyph during the break, grey while snoozed.
-2. **Tray flyout** (left-click) — acrylic flyout with the live countdown, "Start break now" button, and quick snooze options. Auto-opens during the pre-ping.
+2. **Tray flyout** (left-click) — acrylic flyout with the live countdown, "Start break now" button, and quick snooze options. Slides up from the tray on click and auto-opens during the pre-ping.
 3. **Break popup** (when the timer fires) — centered Mica card with two states: prompt (`[Start 20 sec]` / `[Snooze]`) and timer (big 56px countdown with progress bar).
 
 The 3rd break in every cycle is a long 2-minute break instead of the usual 20 seconds.

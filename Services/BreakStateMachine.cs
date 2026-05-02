@@ -21,20 +21,12 @@ public sealed class TimingProfile
     public int LongBreakSec { get; init; }
     public int PrePingLeadSec { get; init; }
 
-    public static TimingProfile Real(int workMinutes) => new()
+    public static TimingProfile Standard(int workMinutes) => new()
     {
         WorkSec = workMinutes * 60,
         ShortBreakSec = 20,
         LongBreakSec = 120,
         PrePingLeadSec = 5,
-    };
-
-    public static TimingProfile Demo => new()
-    {
-        WorkSec = 20,
-        ShortBreakSec = 8,
-        LongBreakSec = 25,
-        PrePingLeadSec = 3,
     };
 }
 
@@ -51,7 +43,6 @@ public sealed class BreakStateMachine : INotifyPropertyChanged
     private int _snoozeLeft;
     private int _autoSnoozeLeft;
     private int _cycle = 1;
-    private bool _demoMode;
     private bool _prePingFired;
     private TimingProfile _timing;
     private int _workMinutes = 20;
@@ -59,7 +50,7 @@ public sealed class BreakStateMachine : INotifyPropertyChanged
     public BreakStateMachine(DispatcherQueue ui)
     {
         _ui = ui;
-        _timing = TimingProfile.Real(_workMinutes);
+        _timing = TimingProfile.Standard(_workMinutes);
         _workLeft = _timing.WorkSec;
         _breakLeft = _timing.ShortBreakSec;
     }
@@ -90,19 +81,6 @@ public sealed class BreakStateMachine : INotifyPropertyChanged
     public int CurrentBreakTotalSec => IsLongBreak ? _timing.LongBreakSec : _timing.ShortBreakSec;
     public int WorkTotalSec => _timing.WorkSec;
 
-    public bool DemoMode
-    {
-        get => _demoMode;
-        set
-        {
-            if (_demoMode == value) return;
-            _demoMode = value;
-            _timing = value ? TimingProfile.Demo : TimingProfile.Real(_workMinutes);
-            ResetToWorking();
-            OnChanged();
-        }
-    }
-
     public int WorkMinutes
     {
         get => _workMinutes;
@@ -111,11 +89,8 @@ public sealed class BreakStateMachine : INotifyPropertyChanged
             value = Math.Clamp(value, 1, 60);
             if (_workMinutes == value) return;
             _workMinutes = value;
-            if (!_demoMode)
-            {
-                _timing = TimingProfile.Real(value);
-                ResetToWorking();
-            }
+            _timing = TimingProfile.Standard(value);
+            ResetToWorking();
             OnChanged();
         }
     }
