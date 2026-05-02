@@ -1,11 +1,8 @@
 using System;
 using System.ComponentModel;
-using System.Numerics;
 using Microsoft.UI;
-using Microsoft.UI.Composition;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
-using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Xaml.Media;
 using Twenti.Services;
 using Windows.Graphics;
@@ -16,7 +13,6 @@ namespace Twenti.Views;
 public sealed partial class TrayFlyout : Window
 {
     private readonly BreakStateMachine _sm;
-    private bool _enterPlayed;
 
     public TrayFlyout()
     {
@@ -31,7 +27,6 @@ public sealed partial class TrayFlyout : Window
         _sm.PropertyChanged += OnStateChanged;
         Closed += (_, _) => _sm.PropertyChanged -= OnStateChanged;
         Activated += OnActivated;
-        Root.Loaded += (_, _) => PlayEnterAnimation();
 
         UpdateUi();
     }
@@ -47,12 +42,15 @@ public sealed partial class TrayFlyout : Window
             p.IsMaximizable = false;
             p.IsMinimizable = false;
             p.IsResizable = false;
-            p.IsAlwaysOnTop = true;
+            // Note: NOT IsAlwaysOnTop — keeping it false lets Activated/Deactivated
+            // fire reliably so the flyout dismisses when you click elsewhere.
             p.SetBorderAndTitleBar(false, false);
         }
 
         appWindow.IsShownInSwitchers = false;
         Win32Helper.HideFromAltTab(hwnd);
+        Win32Helper.MakeBorderless(hwnd);
+        Win32Helper.ForceImmersiveDark(hwnd);
         Win32Helper.RoundCorners(hwnd);
         Win32Helper.RemoveBorder(hwnd);
 
@@ -67,37 +65,9 @@ public sealed partial class TrayFlyout : Window
         // Anchor bottom-right of whichever monitor the cursor is on.
         var workArea = Win32Helper.GetCursorDisplayArea().WorkArea;
         int margin = (int)Math.Round(12 * scale);
-        int x = workArea.X + workArea.Width - width - margin;
+        int x = workArea.X + workArea.Width  - width  - margin;
         int y = workArea.Y + workArea.Height - height - margin;
         appWindow.MoveAndResize(new RectInt32(x, y, width, height));
-    }
-
-    private void PlayEnterAnimation()
-    {
-        if (_enterPlayed) return;
-        _enterPlayed = true;
-
-        var visual = ElementCompositionPreview.GetElementVisual(Root);
-        var compositor = visual.Compositor;
-
-        ElementCompositionPreview.SetIsTranslationEnabled(Root, true);
-        visual.Properties.InsertVector3("Translation", new Vector3(0, 14f, 0));
-        visual.Opacity = 0f;
-
-        var ease = compositor.CreateCubicBezierEasingFunction(new Vector2(0.1f, 0.9f), new Vector2(0.2f, 1f));
-
-        var translateAnim = compositor.CreateVector3KeyFrameAnimation();
-        translateAnim.InsertKeyFrame(0f, new Vector3(0, 14f, 0));
-        translateAnim.InsertKeyFrame(1f, Vector3.Zero, ease);
-        translateAnim.Duration = TimeSpan.FromMilliseconds(180);
-
-        var opacityAnim = compositor.CreateScalarKeyFrameAnimation();
-        opacityAnim.InsertKeyFrame(0f, 0f);
-        opacityAnim.InsertKeyFrame(1f, 1f, ease);
-        opacityAnim.Duration = TimeSpan.FromMilliseconds(180);
-
-        visual.Properties.StartAnimation("Translation", translateAnim);
-        visual.StartAnimation("Opacity", opacityAnim);
     }
 
     private void OnActivated(object sender, Microsoft.UI.Xaml.WindowActivatedEventArgs args)

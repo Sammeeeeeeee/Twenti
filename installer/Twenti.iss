@@ -55,3 +55,9 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+; Force-kill any running Twenti so the uninstaller can delete the exe.
+; AppMutex would only prompt; this just ends the process.
+Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM {#AppExe}"; \
+  Flags: runhidden; RunOnceId: "KillTwenti"

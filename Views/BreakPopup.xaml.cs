@@ -18,6 +18,13 @@ public sealed partial class BreakPopup : Window
 {
     private readonly BreakStateMachine _sm;
     private bool _enterPlayed;
+    private AppWindow? _appWindow;
+    private double _scale = 1.0;
+
+    // Logical (DIP) heights tuned to each phase's content — no wasted space.
+    private const int LogicalWidth      = 380;
+    private const int LogicalAlertHeight = 240;
+    private const int LogicalTimerHeight = 220;
 
     public BreakPopup()
     {
@@ -27,7 +34,7 @@ public sealed partial class BreakPopup : Window
         // Solid card per spec § 11 — no Mica (Mica bleeds the wallpaper through).
         Title = "20/20 — break";
 
-        ConfigureChromeAndPosition();
+        ConfigureChrome();
 
         _sm.PropertyChanged += OnStateChanged;
         Closed += (_, _) => _sm.PropertyChanged -= OnStateChanged;
@@ -37,13 +44,13 @@ public sealed partial class BreakPopup : Window
         UpdateUi();
     }
 
-    private void ConfigureChromeAndPosition()
+    private void ConfigureChrome()
     {
         var hwnd = WindowNative.GetWindowHandle(this);
         var id = Win32Interop.GetWindowIdFromWindow(hwnd);
-        var appWindow = AppWindow.GetFromWindowId(id);
+        _appWindow = AppWindow.GetFromWindowId(id);
 
-        if (appWindow.Presenter is OverlappedPresenter p)
+        if (_appWindow.Presenter is OverlappedPresenter p)
         {
             p.IsMaximizable = false;
             p.IsMinimizable = false;
@@ -52,24 +59,36 @@ public sealed partial class BreakPopup : Window
             p.SetBorderAndTitleBar(false, false);
         }
 
-        appWindow.IsShownInSwitchers = false;
+        _appWindow.IsShownInSwitchers = false;
         Win32Helper.HideFromAltTab(hwnd);
+
+        // Aggressive border kill — this is the order that worked:
+        // 1. Strip the OS window styles entirely (WS_POPUP), so DWM has nothing to draw.
+        // 2. Force the chrome theme dark so any residual paint matches the card.
+        // 3. Round the corners.
+        // 4. Tell DWM "no border colour" as belt-and-braces.
+        Win32Helper.MakeBorderless(hwnd);
+        Win32Helper.ForceImmersiveDark(hwnd);
         Win32Helper.RoundCorners(hwnd);
         Win32Helper.RemoveBorder(hwnd);
 
-        // Logical (DIP) dimensions sized to fit prompt-state content with no waste.
-        const int logicalWidth = 380;
-        const int logicalHeight = 240;
+        _scale = Win32Helper.GetDpiScale(hwnd);
+        ResizeForCurrentPhase();
+    }
 
-        double scale = Win32Helper.GetDpiScale(hwnd);
-        int width  = (int)Math.Round(logicalWidth  * scale);
-        int height = (int)Math.Round(logicalHeight * scale);
+    private void ResizeForCurrentPhase()
+    {
+        if (_appWindow is null) return;
+
+        int logicalHeight = _sm.Phase == Phase.Alert ? LogicalAlertHeight : LogicalTimerHeight;
+        int width  = (int)Math.Round(LogicalWidth   * _scale);
+        int height = (int)Math.Round(logicalHeight  * _scale);
 
         // True center of the monitor where the cursor lives.
         var workArea = Win32Helper.GetCursorDisplayArea().WorkArea;
-        int x = workArea.X + (workArea.Width - width) / 2;
+        int x = workArea.X + (workArea.Width  - width)  / 2;
         int y = workArea.Y + (workArea.Height - height) / 2;
-        appWindow.MoveAndResize(new RectInt32(x, y, width, height));
+        _appWindow.MoveAndResize(new RectInt32(x, y, width, height));
     }
 
     private void PlayEnterAnimation()
@@ -80,26 +99,33 @@ public sealed partial class BreakPopup : Window
         var visual = ElementCompositionPreview.GetElementVisual(Root);
         var compositor = visual.Compositor;
         visual.CenterPoint = new Vector3((float)(Root.ActualWidth / 2), (float)(Root.ActualHeight / 2), 0);
-        visual.Scale = new Vector3(0.94f, 0.94f, 1f);
+        visual.Scale = new Vector3(0.96f, 0.96f, 1f);
         visual.Opacity = 0f;
 
-        var ease = compositor.CreateCubicBezierEasingFunction(new Vector2(0.08f, 0.9f), new Vector2(0.2f, 1f));
+        var ease = compositor.CreateCubicBezierEasingFunction(new Vector2(0.1f, 0.9f), new Vector2(0.2f, 1f));
 
         var scaleAnim = compositor.CreateVector3KeyFrameAnimation();
-        scaleAnim.InsertKeyFrame(0f, new Vector3(0.94f, 0.94f, 1f));
+        scaleAnim.InsertKeyFrame(0f, new Vector3(0.96f, 0.96f, 1f));
         scaleAnim.InsertKeyFrame(1f, Vector3.One, ease);
-        scaleAnim.Duration = TimeSpan.FromMilliseconds(220);
+        scaleAnim.Duration = TimeSpan.FromMilliseconds(140);
 
         var opacityAnim = compositor.CreateScalarKeyFrameAnimation();
         opacityAnim.InsertKeyFrame(0f, 0f);
         opacityAnim.InsertKeyFrame(1f, 1f, ease);
-        opacityAnim.Duration = TimeSpan.FromMilliseconds(220);
+        opacityAnim.Duration = TimeSpan.FromMilliseconds(140);
 
         visual.StartAnimation("Scale", scaleAnim);
         visual.StartAnimation("Opacity", opacityAnim);
     }
 
-    private void OnStateChanged(object? sender, PropertyChangedEventArgs e) => UpdateUi();
+    private void OnStateChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        UpdateUi();
+        if (e.PropertyName == nameof(BreakStateMachine.Phase))
+        {
+            ResizeForCurrentPhase();
+        }
+    }
 
     private void UpdateUi()
     {

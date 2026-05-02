@@ -141,7 +141,7 @@
 
             <!-- Timer state -->
             <StackPanel x:Name="TimerPanel" Spacing="0" Visibility="Collapsed">
-                <Grid Margin="0,0,0,14">
+                <Grid Margin="0,0,0,12">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
@@ -166,7 +166,7 @@
                 </Grid>
                 <Border Height="6"
                         CornerRadius="3"
-                        Margin="0,0,0,10"
+                        Margin="0,0,0,12"
                         Background="{ThemeResource ControlStrokeColorDefaultBrush}">
                     <Grid HorizontalAlignment="Stretch">
                         <Border x:Name="TimerFill"
@@ -176,10 +176,34 @@
                                 Width="0"/>
                     </Grid>
                 </Border>
+                <Button x:Name="PauseButton"
+                        HorizontalAlignment="Stretch"
+                        Padding="0,8"
+                        CornerRadius="4"
+                        FontFamily="{StaticResource AppFont}"
+                        FontSize="13"
+                        Click="OnSnooze">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Pause" HorizontalAlignment="Center"/>
+                        <Border Grid.Column="1"
+                                Margin="6,0,0,0"
+                                Padding="6,1"
+                                CornerRadius="4"
+                                Background="{ThemeResource SubtleFillColorSecondaryBrush}">
+                            <TextBlock Text="esc" FontSize="11"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                        </Border>
+                    </Grid>
+                </Button>
                 <TextBlock HorizontalAlignment="Center"
-                           FontSize="11"
+                           Margin="0,8,0,0"
+                           FontSize="10"
                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                           Text="esc to pause · 1–9 to snooze N minutes"/>
+                           Text="1–9 to snooze that many minutes"/>
             </StackPanel>
         </Grid>
     </Grid>

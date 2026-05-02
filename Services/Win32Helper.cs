@@ -44,6 +44,45 @@ internal static class Win32Helper
         DwmSetWindowAttribute(hwnd, 34, ref color, sizeof(int));
     }
 
+    public static void ForceImmersiveDark(IntPtr hwnd)
+    {
+        // DWMWA_USE_IMMERSIVE_DARK_MODE = 20 — keeps the system-drawn chrome dark.
+        int value = 1;
+        DwmSetWindowAttribute(hwnd, 20, ref value, sizeof(int));
+    }
+
+    /// <summary>
+    /// Switches the window to a true popup style (WS_POPUP), stripping every system-drawn
+    /// chrome element: caption, sizing border, dialog frame. WinAppSDK's
+    /// OverlappedPresenter.SetBorderAndTitleBar(false, false) only hides them visually;
+    /// this removes the styles entirely so DWM has nothing to draw at the edge.
+    /// </summary>
+    public static void MakeBorderless(IntPtr hwnd)
+    {
+        const int GWL_STYLE = -16;
+        const long WS_CAPTION       = 0x00C00000L;
+        const long WS_THICKFRAME    = 0x00040000L;
+        const long WS_MINIMIZEBOX   = 0x00020000L;
+        const long WS_MAXIMIZEBOX   = 0x00010000L;
+        const long WS_SYSMENU       = 0x00080000L;
+        const long WS_DLGFRAME      = 0x00400000L;
+        const long WS_BORDER        = 0x00800000L;
+        const long WS_POPUP         = unchecked((long)0x80000000L);
+
+        const long stripMask = WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX
+                             | WS_MAXIMIZEBOX | WS_SYSMENU | WS_DLGFRAME | WS_BORDER;
+
+        long style = GetWindowLongPtr(hwnd, GWL_STYLE).ToInt64();
+        style = (style & ~stripMask) | WS_POPUP;
+        SetWindowLongPtr(hwnd, GWL_STYLE, new IntPtr(style));
+
+        // Tell the OS to recompute the non-client area using the new styles.
+        const uint SWP_NOMOVE = 0x0002, SWP_NOSIZE = 0x0001, SWP_NOZORDER = 0x0004,
+                   SWP_FRAMECHANGED = 0x0020;
+        SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+    }
+
     public static void HideFromAltTab(IntPtr hwnd)
     {
         const int GWL_EXSTYLE = -20;
@@ -69,4 +108,8 @@ internal static class Win32Helper
 
     [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)]
     private static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter,
+        int X, int Y, int cx, int cy, uint uFlags);
 }

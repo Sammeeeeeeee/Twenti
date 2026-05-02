@@ -1,4 +1,6 @@
 using System;
+using System.Diagnostics;
+using System.Threading.Tasks;
 using H.NotifyIcon;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
@@ -15,6 +17,7 @@ public partial class App : Application
     public BreakStateMachine StateMachine { get; private set; } = null!;
     public SoundEngine Sound { get; private set; } = null!;
     public ThemeListener Theme { get; private set; } = null!;
+    public AppSettings Settings { get; private set; } = null!;
     public DispatcherQueue UIQueue { get; private set; } = null!;
 
     private TaskbarIcon? _trayIcon;
@@ -34,7 +37,8 @@ public partial class App : Application
 
         _ownerWindow = new MainWindow();
 
-        Sound = new SoundEngine();
+        Settings = AppSettings.Load();
+        Sound = new SoundEngine { Muted = Settings.Muted };
         Theme = new ThemeListener();
         StateMachine = new BreakStateMachine(UIQueue);
 
@@ -56,6 +60,48 @@ public partial class App : Application
 
         StateMachine.Start();
         RefreshTray();
+
+        if (Settings.CheckForUpdates)
+        {
+            _ = Task.Delay(TimeSpan.FromSeconds(5)).ContinueWith(_ => CheckForUpdatesAsync(silentIfNone: true));
+        }
+    }
+
+    private async Task CheckForUpdatesAsync(bool silentIfNone)
+    {
+        var info = await new UpdateChecker().CheckAsync().ConfigureAwait(false);
+        UIQueue.TryEnqueue(() =>
+        {
+            if (info is null)
+            {
+                if (!silentIfNone) ShowToast("You're on the latest version.");
+                return;
+            }
+
+            if (_trayIcon is null) return;
+            _trayIcon.ShowNotification(
+                title: $"Twenti {info.LatestVersion} is available",
+                message: "Click to open the release page.",
+                timeout: TimeSpan.FromSeconds(10));
+
+            // The first left-click after the toast also takes them there.
+            _trayIcon.LeftClickCommand = new RelayCommand(() =>
+            {
+                _trayIcon.LeftClickCommand = new RelayCommand(OnTrayLeftClick);
+                OpenUrl(info.ReleaseUrl);
+            });
+        });
+    }
+
+    private void ShowToast(string message)
+    {
+        _trayIcon?.ShowNotification("Twenti", message, timeout: TimeSpan.FromSeconds(4));
+    }
+
+    private static void OpenUrl(string url)
+    {
+        try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); }
+        catch { /* ignore */ }
     }
 
     private MenuFlyout BuildContextMenu()
@@ -71,8 +117,29 @@ public partial class App : Application
         menu.Items.Add(new MenuFlyoutSeparator());
 
         var muteItem = new ToggleMenuFlyoutItem { Text = "Mute sounds", IsChecked = Sound.Muted };
-        muteItem.Click += (_, _) => Sound.Muted = muteItem.IsChecked;
+        muteItem.Click += (_, _) =>
+        {
+            Sound.Muted = muteItem.IsChecked;
+            Settings.Muted = muteItem.IsChecked;
+            Settings.Save();
+        };
         menu.Items.Add(muteItem);
+
+        var updateToggle = new ToggleMenuFlyoutItem
+        {
+            Text = "Check for updates",
+            IsChecked = Settings.CheckForUpdates,
+        };
+        updateToggle.Click += (_, _) =>
+        {
+            Settings.CheckForUpdates = updateToggle.IsChecked;
+            Settings.Save();
+        };
+        menu.Items.Add(updateToggle);
+
+        var checkNow = new MenuFlyoutItem { Text = "Check for updates now" };
+        checkNow.Click += async (_, _) => await CheckForUpdatesAsync(silentIfNone: false);
+        menu.Items.Add(checkNow);
 
         menu.Items.Add(new MenuFlyoutSeparator());
 
