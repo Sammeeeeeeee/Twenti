@@ -1,0 +1,28 @@
+## .NET / Visual Studio
+[Bb]in/
+[Oo]bj/
+[Pp]ublish/
+*.user
+*.suo
+.vs/
+.vscode/
+
+## NuGet
+*.nupkg
+*.snupkg
+.nuget/
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+## Build outputs / Inno Setup
+installer/Output/
+*.log
+*.ilk
+*.pdb
+*.exp
+*.lib
+
+## OS / IDE
+.DS_Store
+Thumbs.db

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Default">
+            <Color x:Key="StatusGreenColor">#FF6CCB5F</Color>
+            <Color x:Key="StatusYellowColor">#FFFCE100</Color>
+            <Color x:Key="StatusGreyColor">#50FFFFFF</Color>
+            <SolidColorBrush x:Key="StatusGreenBrush" Color="{StaticResource StatusGreenColor}" />
+            <SolidColorBrush x:Key="StatusYellowBrush" Color="{StaticResource StatusYellowColor}" />
+            <SolidColorBrush x:Key="StatusGreyBrush" Color="{StaticResource StatusGreyColor}" />
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Light">
+            <Color x:Key="StatusGreenColor">#FF0F7B0F</Color>
+            <Color x:Key="StatusYellowColor">#FF835B00</Color>
+            <Color x:Key="StatusGreyColor">#60000000</Color>
+            <SolidColorBrush x:Key="StatusGreenBrush" Color="{StaticResource StatusGreenColor}" />
+            <SolidColorBrush x:Key="StatusYellowBrush" Color="{StaticResource StatusYellowColor}" />
+            <SolidColorBrush x:Key="StatusGreyBrush" Color="{StaticResource StatusGreyColor}" />
+        </ResourceDictionary>
+    </ResourceDictionary.ThemeDictionaries>
+
+    <FontFamily x:Key="AppFont">Segoe UI Variable Display, Segoe UI Variable, Segoe UI</FontFamily>
+    <FontFamily x:Key="AppFontMono">Cascadia Mono, Consolas</FontFamily>
+
+</ResourceDictionary>
