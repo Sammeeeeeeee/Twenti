@@ -49,11 +49,22 @@ public sealed partial class TrayFlyout : Window
             p.SetBorderAndTitleBar(false, false);
         }
 
-        const int width = 264;
-        const int height = 240;
-        var area = DisplayArea.GetFromWindowId(id, DisplayAreaFallback.Primary).WorkArea;
-        int x = area.X + area.Width - width - 16;
-        int y = area.Y + area.Height - height - 12;
+        appWindow.IsShownInSwitchers = false;
+        Win32Helper.HideFromAltTab(hwnd);
+        Win32Helper.RoundCorners(hwnd);
+
+        const int logicalWidth = 280;
+        const int logicalHeight = 280;
+
+        double scale = Win32Helper.GetDpiScale(hwnd);
+        int width  = (int)Math.Round(logicalWidth  * scale);
+        int height = (int)Math.Round(logicalHeight * scale);
+
+        // Anchor to the bottom-right of whichever monitor the cursor is on (i.e. the monitor whose tray was clicked).
+        var workArea = Win32Helper.GetCursorDisplayArea().WorkArea;
+        int margin = (int)Math.Round(12 * scale);
+        int x = workArea.X + workArea.Width - width - margin;
+        int y = workArea.Y + workArea.Height - height - margin;
         appWindow.MoveAndResize(new RectInt32(x, y, width, height));
     }
 

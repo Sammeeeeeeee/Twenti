@@ -12,7 +12,8 @@
       "Bash(echo \"exit code: $?\")",
       "Bash(tasklist)",
       "Bash(taskkill /F /PID 4668)",
-      "Bash(taskkill //F //PID 4668)"
+      "Bash(taskkill //F //PID 4668)",
+      "Bash(taskkill //F //IM Twenti.exe)"
     ]
   }
 }

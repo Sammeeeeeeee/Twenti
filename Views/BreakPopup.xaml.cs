@@ -1,11 +1,9 @@
 using System;
 using System.ComponentModel;
 using Microsoft.UI;
-using Microsoft.UI.Composition.SystemBackdrops;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Input;
-using Microsoft.UI.Xaml.Media;
 using Twenti.Services;
 using Windows.Graphics;
 using Windows.System;
@@ -22,7 +20,7 @@ public sealed partial class BreakPopup : Window
         InitializeComponent();
         _sm = App.Current.StateMachine;
 
-        SystemBackdrop = new MicaBackdrop { Kind = MicaKind.BaseAlt };
+        // Solid card per spec § 11 — NOT Mica (Mica bleeds the wallpaper through)
         Title = "20/20 — break";
 
         ConfigureChromeAndPosition();
@@ -49,11 +47,22 @@ public sealed partial class BreakPopup : Window
             p.SetBorderAndTitleBar(false, false);
         }
 
-        const int width = 380;
-        const int height = 220;
-        var area = DisplayArea.GetFromWindowId(id, DisplayAreaFallback.Primary).WorkArea;
-        int x = area.X + (area.Width - width) / 2;
-        int y = area.Y + area.Height - height - 12;
+        appWindow.IsShownInSwitchers = false;
+        Win32Helper.HideFromAltTab(hwnd);
+        Win32Helper.RoundCorners(hwnd);
+
+        // Logical (DIP) dimensions — height needs room for header + heading + body + button row + auto-snooze bar.
+        const int logicalWidth = 380;
+        const int logicalHeight = 320;
+
+        double scale = Win32Helper.GetDpiScale(hwnd);
+        int width  = (int)Math.Round(logicalWidth  * scale);
+        int height = (int)Math.Round(logicalHeight * scale);
+
+        // Centered horizontally on the monitor where the cursor lives, just above the taskbar.
+        var workArea = Win32Helper.GetCursorDisplayArea().WorkArea;
+        int x = workArea.X + (workArea.Width - width) / 2;
+        int y = workArea.Y + workArea.Height - height - (int)Math.Round(12 * scale);
         appWindow.MoveAndResize(new RectInt32(x, y, width, height));
     }
 

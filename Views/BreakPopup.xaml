@@ -6,7 +6,10 @@
     xmlns:local="using:Twenti.Views">
 
     <Grid x:Name="Root"
-          Background="Transparent"
+          Background="{ThemeResource PopupCardBrush}"
+          BorderBrush="{ThemeResource PopupCardBorderBrush}"
+          BorderThickness="1"
+          CornerRadius="8"
           Padding="20"
           KeyDown="OnKeyDown"
           IsTabStop="True">

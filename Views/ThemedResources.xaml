@@ -8,17 +8,25 @@
             <Color x:Key="StatusGreenColor">#FF6CCB5F</Color>
             <Color x:Key="StatusYellowColor">#FFFCE100</Color>
             <Color x:Key="StatusGreyColor">#50FFFFFF</Color>
+            <Color x:Key="PopupCardColor">#FF2C2C2C</Color>
+            <Color x:Key="PopupCardBorderColor">#14FFFFFF</Color>
             <SolidColorBrush x:Key="StatusGreenBrush" Color="{StaticResource StatusGreenColor}" />
             <SolidColorBrush x:Key="StatusYellowBrush" Color="{StaticResource StatusYellowColor}" />
             <SolidColorBrush x:Key="StatusGreyBrush" Color="{StaticResource StatusGreyColor}" />
+            <SolidColorBrush x:Key="PopupCardBrush" Color="{StaticResource PopupCardColor}" />
+            <SolidColorBrush x:Key="PopupCardBorderBrush" Color="{StaticResource PopupCardBorderColor}" />
         </ResourceDictionary>
         <ResourceDictionary x:Key="Light">
             <Color x:Key="StatusGreenColor">#FF0F7B0F</Color>
             <Color x:Key="StatusYellowColor">#FF835B00</Color>
             <Color x:Key="StatusGreyColor">#60000000</Color>
+            <Color x:Key="PopupCardColor">#FFFFFFFF</Color>
+            <Color x:Key="PopupCardBorderColor">#0F000000</Color>
             <SolidColorBrush x:Key="StatusGreenBrush" Color="{StaticResource StatusGreenColor}" />
             <SolidColorBrush x:Key="StatusYellowBrush" Color="{StaticResource StatusYellowColor}" />
             <SolidColorBrush x:Key="StatusGreyBrush" Color="{StaticResource StatusGreyColor}" />
+            <SolidColorBrush x:Key="PopupCardBrush" Color="{StaticResource PopupCardColor}" />
+            <SolidColorBrush x:Key="PopupCardBorderBrush" Color="{StaticResource PopupCardBorderColor}" />
         </ResourceDictionary>
     </ResourceDictionary.ThemeDictionaries>
 
