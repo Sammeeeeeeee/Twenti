@@ -42,7 +42,7 @@ jobs:
         run: dotnet restore Twenti.csproj
 
       - name: Publish single-file portable
-        run: dotnet publish Twenti.csproj -c Release -r win-x64 -o publish
+        run: dotnet publish Twenti.csproj -c Release -r win-x64 -o publish -p:PublishTrimmed=true -p:EnableCompressionInSingleFile=true
 
       - name: Upload portable artifact
         uses: actions/upload-artifact@v4
@@ -67,10 +67,16 @@ jobs:
           path: installer/Output/Twenti-Setup.exe
           if-no-files-found: error
 
-      # ── Final step on tag push: replace the "Building…" placeholder with the
-      # real release containing both the portable .exe and the Setup .exe as
-      # raw downloadable files (NOT zipped — the workflow-artifact zips above
-      # are just for non-tag CI runs).
+- name: Generate SHA-256 checksums
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          "### SHA-256 Checksums" > release_body.md
+          "```text" >> release_body.md
+          Get-FileHash publish/Twenti.exe, installer/Output/Twenti-Setup.exe -Algorithm SHA256 | 
+          ForEach-Object { "$($_.Hash.ToLower())  $([System.IO.Path]::GetFileName($_.Path))" } >> release_body.md
+          "```" >> release_body.md
+
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
@@ -82,5 +88,4 @@ jobs:
             installer/Output/Twenti-Setup.exe
           draft: false
           generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          body_path: release_body.md

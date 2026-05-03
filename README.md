@@ -2,7 +2,7 @@
   <img src="icon.svg" width="96" alt="Twenti">
 </p>
 
-<h1 align="center">Twenti — 20/20 Eye Break Reminder</h1>
+<h1 align="center">Twenti — 20/20/20 Eye Break Reminder</h1>
 
 <p align="center">
   <a href="https://github.com/Sammeeeeeeee/Twenti/releases/latest/download/Twenti-Setup.exe"><img alt="Download installer" src="https://img.shields.io/badge/Download-Installer-0067c0?style=for-the-badge&logo=windows&logoColor=white"></a>
@@ -19,15 +19,6 @@
 
 A Windows 11 native eye-break reminder. 
 
-<p align="center">
-  <a href="docs/screenshots/flyout-countdown.png"><img src="docs/screenshots/flyout-countdown.png" width="180" alt="Flyout: countdown"></a>
-  <a href="docs/screenshots/flyout-snoozed.png"><img src="docs/screenshots/flyout-snoozed.png" width="180" alt="Flyout: snoozed"></a>
-  <a href="docs/screenshots/short-break-popup.png"><img src="docs/screenshots/short-break-popup.png" width="180" alt="Short break popup"></a>
-  <a href="docs/screenshots/short-break-countdown.png"><img src="docs/screenshots/short-break-countdown.png" width="180" alt="Short break: countdown"></a>
-  <a href="docs/screenshots/long-break-popup.png"><img src="docs/screenshots/long-break-popup.png" width="180" alt="Long break popup"></a>
-</p>
-
-<sub align="center"><i>Click any screenshot to enlarge.</i></sub>
 
 
 ## What is the 20/20/20 rule?
@@ -60,6 +51,17 @@ Mutable through the context menue (right click tray icon)
 - Brown-noise water ambient during the break
 - Rising 3-note resolution when the break completes
 - Descending 2-note acknowledgement when snoozed
+
+## Screenshots
+
+<p>
+  <a href="docs/screenshots/flyout-countdown.png"><img src="docs/screenshots/flyout-countdown.png" width="180" alt="Flyout: countdown"></a>
+  <a href="docs/screenshots/flyout-snoozed.png"><img src="docs/screenshots/flyout-snoozed.png" width="180" alt="Flyout: snoozed"></a>
+  <a href="docs/screenshots/short-break-popup.png"><img src="docs/screenshots/short-break-popup.png" width="180" alt="Short break popup"></a>
+  <a href="docs/screenshots/short-break-countdown.png"><img src="docs/screenshots/short-break-countdown.png" width="180" alt="Short break: countdown"></a>
+  <a href="docs/screenshots/long-break-popup.png"><img src="docs/screenshots/long-break-popup.png" width="180" alt="Long break popup"></a>
+</p>
+
 
 ## Pre-built downloads
 
