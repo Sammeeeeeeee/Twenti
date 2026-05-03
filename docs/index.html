@@ -613,6 +613,95 @@
       color: var(--text);
     }
 
+    /* ─── SCREENSHOTS ─── */
+    .shots-section {
+      padding: 60px 24px 40px;
+      max-width: 1180px;
+      margin: 0 auto;
+    }
+    .shots-section h2 {
+      font-size: clamp(28px, 4vw, 42px);
+      font-weight: 300;
+      letter-spacing: -0.03em;
+      margin-bottom: 12px;
+      text-align: center;
+    }
+    .shots-section .lead {
+      font-size: 16px;
+      color: var(--muted);
+      max-width: 480px;
+      line-height: 1.75;
+      font-weight: 300;
+      margin: 0 auto 48px;
+      text-align: center;
+      text-wrap: pretty;
+    }
+    .shots-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 16px;
+    }
+    .shots-row a.thumb {
+      display: block;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      aspect-ratio: 16 / 11;
+      transition: border-color 0.2s, transform 0.18s;
+    }
+    .shots-row a.thumb:hover {
+      border-color: oklch(72% 0.18 210 / 0.5);
+      transform: translateY(-2px);
+    }
+    .shots-row a.thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      object-position: center;
+      display: block;
+      padding: 12px;
+    }
+
+    /* CSS-only lightbox: each fullscreen wrapper shows when its hash matches via :target. */
+    .lightbox {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.88);
+      backdrop-filter: blur(8px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      padding: 40px;
+      cursor: zoom-out;
+    }
+    .lightbox:target { display: flex; }
+    .lightbox img {
+      max-width: 92vw;
+      max-height: 88vh;
+      border-radius: 12px;
+      box-shadow: 0 40px 100px rgba(0, 0, 0, 0.5);
+    }
+    .lightbox-close {
+      position: absolute;
+      top: 24px;
+      right: 28px;
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: var(--text);
+      font-size: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-decoration: none;
+      transition: background 0.15s;
+    }
+    .lightbox-close:hover { background: rgba(255, 255, 255, 0.16); }
+
     /* ─── ANIMATIONS ─── */
     @keyframes fadeUp {
       from { opacity: 0; transform: translateY(18px); }
@@ -714,6 +803,53 @@
       </div>
     </div>
   </section>
+
+  <hr class="divider" />
+
+  <!-- SCREENSHOTS -->
+  <section class="shots-section" id="screenshots">
+    <h2>See it in action</h2>
+    <p class="lead">Tap any thumbnail to enlarge.</p>
+    <div class="shots-row">
+      <a class="thumb" href="#shot-flyout-countdown">
+        <img src="screenshots/flyout-countdown.png" alt="Flyout — countdown" loading="lazy">
+      </a>
+      <a class="thumb" href="#shot-flyout-snoozed">
+        <img src="screenshots/flyout-snoozed.png" alt="Flyout — snoozed" loading="lazy">
+      </a>
+      <a class="thumb" href="#shot-short-popup">
+        <img src="screenshots/short-break-popup.png" alt="Short break — prompt" loading="lazy">
+      </a>
+      <a class="thumb" href="#shot-short-countdown">
+        <img src="screenshots/short-break-countdown.png" alt="Short break — countdown" loading="lazy">
+      </a>
+      <a class="thumb" href="#shot-long-popup">
+        <img src="screenshots/long-break-popup.png" alt="Long break — prompt" loading="lazy">
+      </a>
+    </div>
+  </section>
+
+  <!-- LIGHTBOXES -->
+  <a class="lightbox" id="shot-flyout-countdown" href="#screenshots" aria-label="Close">
+    <span class="lightbox-close">×</span>
+    <img src="screenshots/flyout-countdown.png" alt="Flyout — countdown">
+  </a>
+  <a class="lightbox" id="shot-flyout-snoozed" href="#screenshots" aria-label="Close">
+    <span class="lightbox-close">×</span>
+    <img src="screenshots/flyout-snoozed.png" alt="Flyout — snoozed">
+  </a>
+  <a class="lightbox" id="shot-short-popup" href="#screenshots" aria-label="Close">
+    <span class="lightbox-close">×</span>
+    <img src="screenshots/short-break-popup.png" alt="Short break — prompt">
+  </a>
+  <a class="lightbox" id="shot-short-countdown" href="#screenshots" aria-label="Close">
+    <span class="lightbox-close">×</span>
+    <img src="screenshots/short-break-countdown.png" alt="Short break — countdown">
+  </a>
+  <a class="lightbox" id="shot-long-popup" href="#screenshots" aria-label="Close">
+    <span class="lightbox-close">×</span>
+    <img src="screenshots/long-break-popup.png" alt="Long break — prompt">
+  </a>
 
   <hr class="divider" />
 

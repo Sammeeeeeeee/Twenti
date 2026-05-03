@@ -19,6 +19,17 @@
 
 A Windows 11 native eye-break reminder. 
 
+<p align="center">
+  <a href="docs/screenshots/flyout-countdown.png"><img src="docs/screenshots/flyout-countdown.png" width="180" alt="Flyout: countdown"></a>
+  <a href="docs/screenshots/flyout-snoozed.png"><img src="docs/screenshots/flyout-snoozed.png" width="180" alt="Flyout: snoozed"></a>
+  <a href="docs/screenshots/short-break-popup.png"><img src="docs/screenshots/short-break-popup.png" width="180" alt="Short break popup"></a>
+  <a href="docs/screenshots/short-break-countdown.png"><img src="docs/screenshots/short-break-countdown.png" width="180" alt="Short break: countdown"></a>
+  <a href="docs/screenshots/long-break-popup.png"><img src="docs/screenshots/long-break-popup.png" width="180" alt="Long break popup"></a>
+</p>
+
+<sub align="center"><i>Click any screenshot to enlarge.</i></sub>
+
+
 ## What is the 20/20/20 rule?
 
 The 20/20/20 rule is a [proven technique](https://pubmed.ncbi.nlm.nih.gov/36473088/) to prevent eye strain, dryness and degradation. 
@@ -26,9 +37,12 @@ The 20/20/20 rule is a [proven technique](https://pubmed.ncbi.nlm.nih.gov/364730
 ## Twenti
 
 Built with **WinUI 3** (Windows App SDK), this aims to be native and light, to be as unobtrusive as possible, but easily accessible. 
-It lives in the tray, with the minutes left as countdown. A flyout on click shows more information. Every 20 minutes, a pop up appears in the centre of your screen. You can choose to delay, or press enter to start the countdown (optional: accompanied by white noise). Every 3rd pop up is for 2 minutes. 
 
-### Keyboard (while the popup is focused)
+It lives in the tray, with the minutes left as countdown. 
+A flyout on click shows more information. Every 20 minutes, a pop up appears in the centre of your screen. 
+You can choose to delay, or press enter to start the countdown (optional: accompanied by white noise). Every 3rd pop up is for 2 minutes. 
+
+### Keyboard
 
 - `Enter` — start the break timer
 - `Esc` — snooze 5 minutes
@@ -38,8 +52,9 @@ It lives in the tray, with the minutes left as countdown. A flyout on click show
 
 Snooze 5 / 15 / 30 minutes · Mute or Unmute sounds 
 
-### Sounds (mutable)
+### Sounds 
 
+Mutable through the context menue (right click tray icon)
 - Soft 1318 Hz pre-ping 5 seconds before
 - Warm 3-note chime when the popup appears
 - Brown-noise water ambient during the break
@@ -61,7 +76,6 @@ dotnet build
 dotnet run
 ```
 
-The app starts straight into the system tray.
 
 ## Build a portable single-file exe
 
@@ -69,7 +83,7 @@ The app starts straight into the system tray.
 dotnet publish -c Release -r win-x64 -o publish
 ```
 
-Output: `publish\Twenti.exe`. The Windows App SDK runtime is bundled.
+Output: `publish\Twenti.exe`. Windows App SDK runtime is bundled.
 
 ## Build the installer
 
@@ -78,4 +92,4 @@ dotnet publish -c Release -r win-x64 -o publish
 & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer\Twenti.iss
 ```
 
-Output: `installer\Output\Twenti-Setup.exe`. Installs as user or system wide. Adds a Start Menu entry, optionally runs at login.
+Output: `installer\Output\Twenti-Setup.exe`. Installs as user or system wide, adds a Start Menu entry, optionally runs at login.

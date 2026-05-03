@@ -1,6 +1,7 @@
 using System;
 using System.ComponentModel;
 using Microsoft.UI;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
@@ -14,8 +15,19 @@ public sealed partial class TrayFlyout : Window
 {
     private readonly BreakStateMachine _sm;
     private AppWindow? _appWindow;
+    private IntPtr _hwnd;
     private double _scale = 1.0;
     private bool _isVisible;
+
+    // Foreground-change hook. We keep a strong reference to the delegate so the
+    // GC doesn't reclaim it while the OS still has the function pointer.
+    private IntPtr _hook = IntPtr.Zero;
+    private Win32Helper.WinEventCallback? _hookProc;
+
+    // Brief grace period right after Show() — Windows may not have made us the
+    // foreground window yet, and we don't want to immediately self-dismiss.
+    private DateTime _shownAt;
+    private static readonly TimeSpan GracePeriod = TimeSpan.FromMilliseconds(250);
 
     public TrayFlyout()
     {
@@ -28,18 +40,15 @@ public sealed partial class TrayFlyout : Window
         ConfigureChromeOnce();
 
         _sm.PropertyChanged += OnStateChanged;
-        Activated += OnActivated;
 
         UpdateUi();
-
-        // Stay hidden until first ShowFlyout(). Avoids the window flashing on app start.
         _appWindow?.Hide();
     }
 
     private void ConfigureChromeOnce()
     {
-        var hwnd = WindowNative.GetWindowHandle(this);
-        var id = Win32Interop.GetWindowIdFromWindow(hwnd);
+        _hwnd = WindowNative.GetWindowHandle(this);
+        var id = Win32Interop.GetWindowIdFromWindow(_hwnd);
         _appWindow = AppWindow.GetFromWindowId(id);
 
         if (_appWindow.Presenter is OverlappedPresenter p)
@@ -47,34 +56,28 @@ public sealed partial class TrayFlyout : Window
             p.IsMaximizable = false;
             p.IsMinimizable = false;
             p.IsResizable = false;
-            // IsAlwaysOnTop must be true so the flyout always lands above the
-            // window the user clicked from. Click-away is handled via the
-            // Activated event — it still fires for topmost windows.
+            // Topmost so it draws above the user's app windows when shown.
+            // The foreground-change hook below handles dismissal.
             p.IsAlwaysOnTop = true;
             p.SetBorderAndTitleBar(false, false);
         }
 
         _appWindow.IsShownInSwitchers = false;
-        Win32Helper.HideFromAltTab(hwnd);
-        Win32Helper.MakeBorderless(hwnd);
-        Win32Helper.ForceImmersiveDark(hwnd);
-        Win32Helper.RoundCorners(hwnd);
-        Win32Helper.RemoveBorder(hwnd);
+        Win32Helper.HideFromAltTab(_hwnd);
+        Win32Helper.MakeBorderless(_hwnd);
+        Win32Helper.ForceImmersiveDark(_hwnd);
+        Win32Helper.RoundCorners(_hwnd);
+        Win32Helper.RemoveBorder(_hwnd);
 
-        _scale = Win32Helper.GetDpiScale(hwnd);
+        _scale = Win32Helper.GetDpiScale(_hwnd);
     }
 
-    /// <summary>
-    /// Repositions and shows the flyout. Cheap because the Window already exists —
-    /// we just move the AppWindow and call Show().
-    /// </summary>
     public void ShowAt()
     {
         if (_appWindow is null) return;
 
         UpdateUi();
 
-        // Recalculate target monitor every time, since the cursor may have moved.
         const int logicalWidth  = 280;
         const int logicalHeight = 165;
         int width  = (int)Math.Round(logicalWidth  * _scale);
@@ -87,23 +90,61 @@ public sealed partial class TrayFlyout : Window
 
         _appWindow.MoveAndResize(new RectInt32(x, y, width, height));
         _appWindow.Show(activateWindow: true);
-        _isVisible = true;
+
+        // Drag ourselves to the foreground — necessary because the click came
+        // from the tray (Explorer.exe), so we don't automatically get focus.
+        Win32Helper.SetForegroundWindow(_hwnd);
         Activate();
+
+        _shownAt = DateTime.UtcNow;
+        _isVisible = true;
+
+        InstallForegroundHook();
     }
 
     public void HideQuiet()
     {
         if (!_isVisible || _appWindow is null) return;
         _isVisible = false;
+        UninstallForegroundHook();
         _appWindow.Hide();
     }
 
-    private void OnActivated(object sender, Microsoft.UI.Xaml.WindowActivatedEventArgs args)
+    private void InstallForegroundHook()
     {
-        if (args.WindowActivationState == WindowActivationState.Deactivated)
+        if (_hook != IntPtr.Zero) return;
+        _hookProc = OnForegroundChanged;
+        _hook = Win32Helper.SetWinEventHook(
+            Win32Helper.EVENT_SYSTEM_FOREGROUND,
+            Win32Helper.EVENT_SYSTEM_FOREGROUND,
+            IntPtr.Zero,
+            _hookProc,
+            idProcess: 0,
+            idThread: 0,
+            dwFlags: Win32Helper.WINEVENT_OUTOFCONTEXT);
+    }
+
+    private void UninstallForegroundHook()
+    {
+        if (_hook == IntPtr.Zero) return;
+        Win32Helper.UnhookWinEvent(_hook);
+        _hook = IntPtr.Zero;
+        _hookProc = null;
+    }
+
+    private void OnForegroundChanged(IntPtr hWinEventHook, uint eventType,
+        IntPtr hwnd, int idObject, int idChild, uint dwEventThread, uint dwmsEventTime)
+    {
+        // Hook fires on a non-UI thread — bounce back to the dispatcher.
+        App.Current.UIQueue.TryEnqueue(() =>
         {
-            HideQuiet();
-        }
+            if (!_isVisible) return;
+            // Ignore foreground changes during the grace period after show, so
+            // we don't dismiss before SetForegroundWindow has taken effect.
+            if (DateTime.UtcNow - _shownAt < GracePeriod) return;
+            // Hide whenever any window other than ourselves becomes foreground.
+            if (hwnd != _hwnd) HideQuiet();
+        });
     }
 
     private void OnStateChanged(object? sender, PropertyChangedEventArgs e)
