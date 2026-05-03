@@ -13,7 +13,10 @@
       "Bash(tasklist)",
       "Bash(taskkill /F /PID 4668)",
       "Bash(taskkill //F //PID 4668)",
-      "Bash(taskkill //F //IM Twenti.exe)"
+      "Bash(taskkill //F //IM Twenti.exe)",
+      "Bash(where magick *)",
+      "Bash(where convert *)",
+      "Bash(where inkscape *)"
     ]
   }
 }

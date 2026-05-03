@@ -22,9 +22,9 @@ public sealed partial class BreakPopup : Window
     private double _scale = 1.0;
 
     // Logical (DIP) heights tuned to each phase's content — no wasted space.
-    private const int LogicalWidth      = 380;
+    private const int LogicalWidth       = 380;
     private const int LogicalAlertHeight = 240;
-    private const int LogicalTimerHeight = 220;
+    private const int LogicalTimerHeight = 230;
 
     public BreakPopup()
     {
@@ -84,8 +84,8 @@ public sealed partial class BreakPopup : Window
         int width  = (int)Math.Round(LogicalWidth   * _scale);
         int height = (int)Math.Round(logicalHeight  * _scale);
 
-        // True center of the monitor where the cursor lives.
-        var workArea = Win32Helper.GetCursorDisplayArea().WorkArea;
+        // True center of the user-preferred monitor (cursor's, or main).
+        var workArea = App.Current.GetTargetDisplayArea().WorkArea;
         int x = workArea.X + (workArea.Width  - width)  / 2;
         int y = workArea.Y + (workArea.Height - height) / 2;
         _appWindow.MoveAndResize(new RectInt32(x, y, width, height));

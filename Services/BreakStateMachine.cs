@@ -97,13 +97,13 @@ public sealed class BreakStateMachine : INotifyPropertyChanged
 
     public string TooltipText => Phase switch
     {
-        Phase.Working when WorkLeftSec >= 60 => $"20/20 — next break in {WorkLeftSec / 60} min",
-        Phase.Working                        => $"20/20 — next break in {WorkLeftSec}s",
-        Phase.PrePing                        => $"20/20 — break in {WorkLeftSec}s",
-        Phase.Alert                          => "20/20 — break time!",
-        Phase.Break                          => $"20/20 — break · {BreakLeftSec}s left",
-        Phase.Snoozed                        => $"20/20 — snoozed · resumes in {SnoozeLeftSec / 60}m {SnoozeLeftSec % 60}s",
-        _ => "20/20",
+        Phase.Working when WorkLeftSec >= 60 => $"Next break in {WorkLeftSec / 60} min",
+        Phase.Working                        => $"Next break in {WorkLeftSec}s",
+        Phase.PrePing                        => $"Break in {WorkLeftSec}s",
+        Phase.Alert                          => "Break time!",
+        Phase.Break                          => $"Break · {BreakLeftSec}s left",
+        Phase.Snoozed                        => $"Snoozed · resumes in {SnoozeLeftSec / 60}m {SnoozeLeftSec % 60}s",
+        _ => "",
     };
 
     public void Start()

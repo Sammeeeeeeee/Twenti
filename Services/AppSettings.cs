@@ -4,10 +4,17 @@ using System.Text.Json;
 
 namespace Twenti.Services;
 
+public enum MonitorPreference
+{
+    FollowCursor = 0,
+    MainMonitor = 1,
+}
+
 public sealed class AppSettings
 {
     public bool CheckForUpdates { get; set; } = true;
     public bool Muted { get; set; } = false;
+    public MonitorPreference Monitor { get; set; } = MonitorPreference.FollowCursor;
 
     private static readonly string SettingsPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),

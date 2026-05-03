@@ -29,6 +29,7 @@ OutputDir=Output
 OutputBaseFilename=Twenti-Setup
 UninstallDisplayName={#AppName}
 UninstallDisplayIcon={app}\{#AppExe}
+SetupIconFile=app.ico
 SetupLogging=yes
 CloseApplications=yes
 RestartApplications=yes

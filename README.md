@@ -1,17 +1,32 @@
-# Twenti — 20/20 Eye Break Reminder
+<p align="center">
+  <img src="icon.svg" width="96" alt="Twenti">
+</p>
 
-[![Build](https://github.com/Sammeeeeeeee/Twenti/actions/workflows/build.yml/badge.svg)](https://github.com/Sammeeeeeeee/Twenti/actions/workflows/build.yml)
+<h1 align="center">Twenti — 20/20 Eye Break Reminder</h1>
+
+<p align="center">
+  <a href="https://github.com/Sammeeeeeeee/Twenti/releases/latest/download/Twenti-Setup.exe"><img alt="Download installer" src="https://img.shields.io/badge/Download-Installer-0067c0?style=for-the-badge&logo=windows&logoColor=white"></a>
+  <a href="https://github.com/Sammeeeeeeee/Twenti/releases/latest/download/Twenti.exe"><img alt="Download portable" src="https://img.shields.io/badge/Portable-.exe-3a3a3a?style=for-the-badge&logo=windows&logoColor=white"></a>
+  <a href="https://sammeeeeeeee.github.io/Twenti/"><img alt="Website" src="https://img.shields.io/badge/Website-sammeeeeeeee.github.io-60cdff?style=for-the-badge"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/Sammeeeeeeee/Twenti/actions/workflows/build.yml"><img alt="Build" src="https://github.com/Sammeeeeeeee/Twenti/actions/workflows/build.yml/badge.svg"></a>
+  <a href="https://github.com/Sammeeeeeeee/Twenti/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/Sammeeeeeeee/Twenti?label=latest&color=0067c0"></a>
+  <a href="https://github.com/Sammeeeeeeee/Twenti/issues"><img alt="Issues" src="https://img.shields.io/github/issues/Sammeeeeeeee/Twenti?color=3a3a3a"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/Sammeeeeeeee/Twenti?color=3a3a3a"></a>
+</p>
 
 A Windows 11 native eye-break reminder. 
 
 ## What is the 20/20/20 rule?
 
-The [20/20/20 rule]() is a [proven tecnique](https://pubmed.ncbi.nlm.nih.gov/36473088/) to prevent eye strain, dryness and degradation. 
+The 20/20/20 rule is a [proven technique](https://pubmed.ncbi.nlm.nih.gov/36473088/) to prevent eye strain, dryness and degradation. 
 
 ## Twenti
 
-Built with **WinUI 3** (Windows App SDK), this aims to be native and light, to be as unabtrusive as possbile, but easily acessible. 
-It lives in the trey, with the minutes left as countdown. A flyut on click shows more information. Every 20 minutes, a pop up appearsin the centre of your screen. You can choose to delay, or press enter to start the countdown (optional: accmpanied by white nose). Every 3rd pop up is for 2 minutes. 
+Built with **WinUI 3** (Windows App SDK), this aims to be native and light, to be as unobtrusive as possible, but easily accessible. 
+It lives in the tray, with the minutes left as countdown. A flyout on click shows more information. Every 20 minutes, a pop up appears in the centre of your screen. You can choose to delay, or press enter to start the countdown (optional: accompanied by white noise). Every 3rd pop up is for 2 minutes. 
 
 ### Keyboard (while the popup is focused)
 

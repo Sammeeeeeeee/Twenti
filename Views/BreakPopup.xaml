@@ -176,7 +176,7 @@
                                 Width="0"/>
                     </Grid>
                 </Border>
-                <Button x:Name="PauseButton"
+                <Button x:Name="SnoozeTimerButton"
                         HorizontalAlignment="Stretch"
                         Padding="0,8"
                         CornerRadius="4"
@@ -188,7 +188,7 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="Pause" HorizontalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="Snooze" HorizontalAlignment="Center"/>
                         <Border Grid.Column="1"
                                 Margin="6,0,0,0"
                                 Padding="6,1"
@@ -199,11 +199,6 @@
                         </Border>
                     </Grid>
                 </Button>
-                <TextBlock HorizontalAlignment="Center"
-                           Margin="0,8,0,0"
-                           FontSize="10"
-                           Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                           Text="1–9 to snooze that many minutes"/>
             </StackPanel>
         </Grid>
     </Grid>

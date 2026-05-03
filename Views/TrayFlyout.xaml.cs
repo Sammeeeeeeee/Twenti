@@ -13,6 +13,9 @@ namespace Twenti.Views;
 public sealed partial class TrayFlyout : Window
 {
     private readonly BreakStateMachine _sm;
+    private AppWindow? _appWindow;
+    private double _scale = 1.0;
+    private bool _isVisible;
 
     public TrayFlyout()
     {
@@ -22,63 +25,91 @@ public sealed partial class TrayFlyout : Window
         SystemBackdrop = new DesktopAcrylicBackdrop();
         Title = "20/20 flyout";
 
-        ConfigureChromeAndPosition();
+        ConfigureChromeOnce();
 
         _sm.PropertyChanged += OnStateChanged;
-        Closed += (_, _) => _sm.PropertyChanged -= OnStateChanged;
         Activated += OnActivated;
 
         UpdateUi();
+
+        // Stay hidden until first ShowFlyout(). Avoids the window flashing on app start.
+        _appWindow?.Hide();
     }
 
-    private void ConfigureChromeAndPosition()
+    private void ConfigureChromeOnce()
     {
         var hwnd = WindowNative.GetWindowHandle(this);
         var id = Win32Interop.GetWindowIdFromWindow(hwnd);
-        var appWindow = AppWindow.GetFromWindowId(id);
+        _appWindow = AppWindow.GetFromWindowId(id);
 
-        if (appWindow.Presenter is OverlappedPresenter p)
+        if (_appWindow.Presenter is OverlappedPresenter p)
         {
             p.IsMaximizable = false;
             p.IsMinimizable = false;
             p.IsResizable = false;
-            // Note: NOT IsAlwaysOnTop — keeping it false lets Activated/Deactivated
-            // fire reliably so the flyout dismisses when you click elsewhere.
+            // IsAlwaysOnTop must be true so the flyout always lands above the
+            // window the user clicked from. Click-away is handled via the
+            // Activated event — it still fires for topmost windows.
+            p.IsAlwaysOnTop = true;
             p.SetBorderAndTitleBar(false, false);
         }
 
-        appWindow.IsShownInSwitchers = false;
+        _appWindow.IsShownInSwitchers = false;
         Win32Helper.HideFromAltTab(hwnd);
         Win32Helper.MakeBorderless(hwnd);
         Win32Helper.ForceImmersiveDark(hwnd);
         Win32Helper.RoundCorners(hwnd);
         Win32Helper.RemoveBorder(hwnd);
 
-        // Logical (DIP) — sized to fit the actual content with no waste.
-        const int logicalWidth = 280;
+        _scale = Win32Helper.GetDpiScale(hwnd);
+    }
+
+    /// <summary>
+    /// Repositions and shows the flyout. Cheap because the Window already exists —
+    /// we just move the AppWindow and call Show().
+    /// </summary>
+    public void ShowAt()
+    {
+        if (_appWindow is null) return;
+
+        UpdateUi();
+
+        // Recalculate target monitor every time, since the cursor may have moved.
+        const int logicalWidth  = 280;
         const int logicalHeight = 165;
+        int width  = (int)Math.Round(logicalWidth  * _scale);
+        int height = (int)Math.Round(logicalHeight * _scale);
 
-        double scale = Win32Helper.GetDpiScale(hwnd);
-        int width  = (int)Math.Round(logicalWidth  * scale);
-        int height = (int)Math.Round(logicalHeight * scale);
-
-        // Anchor bottom-right of whichever monitor the cursor is on.
-        var workArea = Win32Helper.GetCursorDisplayArea().WorkArea;
-        int margin = (int)Math.Round(12 * scale);
+        var workArea = App.Current.GetTargetDisplayArea().WorkArea;
+        int margin = (int)Math.Round(12 * _scale);
         int x = workArea.X + workArea.Width  - width  - margin;
         int y = workArea.Y + workArea.Height - height - margin;
-        appWindow.MoveAndResize(new RectInt32(x, y, width, height));
+
+        _appWindow.MoveAndResize(new RectInt32(x, y, width, height));
+        _appWindow.Show(activateWindow: true);
+        _isVisible = true;
+        Activate();
+    }
+
+    public void HideQuiet()
+    {
+        if (!_isVisible || _appWindow is null) return;
+        _isVisible = false;
+        _appWindow.Hide();
     }
 
     private void OnActivated(object sender, Microsoft.UI.Xaml.WindowActivatedEventArgs args)
     {
         if (args.WindowActivationState == WindowActivationState.Deactivated)
         {
-            Close();
+            HideQuiet();
         }
     }
 
-    private void OnStateChanged(object? sender, PropertyChangedEventArgs e) => UpdateUi();
+    private void OnStateChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (_isVisible) UpdateUi();
+    }
 
     private void UpdateUi()
     {
@@ -126,18 +157,18 @@ public sealed partial class TrayFlyout : Window
     private void OnStartNow(object sender, RoutedEventArgs e)
     {
         _sm.TriggerBreakNow();
-        Close();
+        HideQuiet();
     }
 
     private void OnSnooze5(object sender, RoutedEventArgs e)
     {
         _sm.Snooze(5);
-        Close();
+        HideQuiet();
     }
 
     private void OnSnooze15(object sender, RoutedEventArgs e)
     {
         _sm.Snooze(15);
-        Close();
+        HideQuiet();
     }
 }
