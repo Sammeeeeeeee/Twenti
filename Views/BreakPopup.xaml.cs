@@ -19,6 +19,7 @@ public sealed partial class BreakPopup : Window
     private readonly BreakStateMachine _sm;
     private bool _enterPlayed;
     private AppWindow? _appWindow;
+    private IntPtr _hwnd;
     private double _scale = 1.0;
 
     // Logical (DIP) heights tuned to each phase's content — no wasted space.
@@ -38,16 +39,38 @@ public sealed partial class BreakPopup : Window
 
         _sm.PropertyChanged += OnStateChanged;
         Closed += (_, _) => _sm.PropertyChanged -= OnStateChanged;
-        Activated += (_, _) => Root.Focus(FocusState.Programmatic);
-        Root.Loaded += (_, _) => PlayEnterAnimation();
+        Activated += OnActivatedFocus;
+        Root.Loaded += (_, _) =>
+        {
+            PlayEnterAnimation();
+            // Belt-and-braces: the Activated event might fire before Root has
+            // loaded. Once it's loaded, take focus so Enter / 1-9 / Esc work
+            // without the user having to click first.
+            Root.Focus(FocusState.Programmatic);
+        };
 
         UpdateUi();
     }
 
+    private void OnActivatedFocus(object sender, WindowActivatedEventArgs args)
+    {
+        if (args.WindowActivationState == WindowActivationState.Deactivated) return;
+        Root.Focus(FocusState.Programmatic);
+    }
+
+    public void BringToFrontAndFocus()
+    {
+        // The popup is shown from a timer tick (no recent input), so Windows
+        // foreground-stealing rules can demote our Activate(). Force it.
+        try { Win32Helper.SetForegroundWindow(_hwnd); } catch { /* best-effort */ }
+        try { Activate(); } catch { /* best-effort */ }
+        Root.Focus(FocusState.Programmatic);
+    }
+
     private void ConfigureChrome()
     {
-        var hwnd = WindowNative.GetWindowHandle(this);
-        var id = Win32Interop.GetWindowIdFromWindow(hwnd);
+        _hwnd = WindowNative.GetWindowHandle(this);
+        var id = Win32Interop.GetWindowIdFromWindow(_hwnd);
         _appWindow = AppWindow.GetFromWindowId(id);
 
         if (_appWindow.Presenter is OverlappedPresenter p)
@@ -60,19 +83,14 @@ public sealed partial class BreakPopup : Window
         }
 
         _appWindow.IsShownInSwitchers = false;
-        Win32Helper.HideFromAltTab(hwnd);
+        Win32Helper.HideFromAltTab(_hwnd);
 
-        // Aggressive border kill — this is the order that worked:
-        // 1. Strip the OS window styles entirely (WS_POPUP), so DWM has nothing to draw.
-        // 2. Force the chrome theme dark so any residual paint matches the card.
-        // 3. Round the corners.
-        // 4. Tell DWM "no border colour" as belt-and-braces.
-        Win32Helper.MakeBorderless(hwnd);
-        Win32Helper.ForceImmersiveDark(hwnd);
-        Win32Helper.RoundCorners(hwnd);
-        Win32Helper.RemoveBorder(hwnd);
+        Win32Helper.MakeBorderless(_hwnd);
+        Win32Helper.ForceImmersiveDark(_hwnd);
+        Win32Helper.RoundCorners(_hwnd);
+        Win32Helper.RemoveBorder(_hwnd);
 
-        _scale = Win32Helper.GetDpiScale(hwnd);
+        _scale = Win32Helper.GetDpiScale(_hwnd);
         ResizeForCurrentPhase();
     }
 

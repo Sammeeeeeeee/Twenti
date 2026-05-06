@@ -43,25 +43,25 @@ public partial class App : Application
         Sound = new SoundEngine { Muted = Settings.Muted };
         Theme = new ThemeListener();
         StateMachine = new BreakStateMachine(UIQueue);
-
         _iconRenderer = new TrayIconRenderer();
 
+        // Get the tray icon visible as fast as possible — that's the user's
+        // signal that the app has started. Anything that isn't strictly
+        // required for the icon to render or respond to clicks is deferred
+        // below.
         _trayIcon = new TaskbarIcon
         {
             ToolTipText = "",
-            // PopupMenu uses Win32 TrackPopupMenuEx — auto-sizes to text and
-            // repositions correctly near the screen edge (the SecondWindow
-            // mode was clipping "Snooze 15 minutes" / "Start with Windows"
-            // when the tray was on the right).
             ContextMenuMode = ContextMenuMode.PopupMenu,
+            // Without this, H.NotifyIcon waits ~500ms for a possible
+            // double-click before firing the single-click command. That
+            // delay is what was making the click-to-close race with the
+            // foreground-change auto-hide.
+            NoLeftClickDelay = true,
             ContextFlyout = BuildContextMenu(),
             LeftClickCommand = new RelayCommand(OnTrayLeftClick),
         };
         _trayIcon.ForceCreate();
-
-        // Pre-create the flyout so the first tray click is instant —
-        // no XAML compilation or DWM init latency on demand.
-        _flyout = new TrayFlyout();
 
         StateMachine.PropertyChanged += (_, _) => UIQueue.TryEnqueue(RefreshTray);
         StateMachine.PhaseChanged += OnPhaseChanged;
@@ -73,6 +73,26 @@ public partial class App : Application
 
         StateMachine.Start();
         RefreshTray();
+
+        // Defer the heavy stuff (flyout window, acrylic backdrop init, update
+        // probe) so the tray icon doesn't have to wait for them.
+        UIQueue.TryEnqueue(DispatcherQueuePriority.Low, OnIdleStartup);
+    }
+
+    private void OnIdleStartup()
+    {
+        _flyout = new TrayFlyout();
+        _flyout.WarmUp();
+
+        if (!Settings.HasShownTrayHint)
+        {
+            Settings.HasShownTrayHint = true;
+            Settings.Save();
+            _trayIcon?.ShowNotification(
+                title: "Twenti is running",
+                message: "Drag the icon to the always-shown area of the taskbar so you can see your timer at a glance.",
+                timeout: TimeSpan.FromSeconds(7));
+        }
 
         if (Settings.CheckForUpdates)
         {
@@ -317,7 +337,7 @@ public partial class App : Application
             _popup = new BreakPopup();
             _popup.Closed += (_, _) => _popup = null;
         }
-        _popup.Activate();
+        _popup.BringToFrontAndFocus();
     }
 
     private void HidePopup()

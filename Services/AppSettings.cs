@@ -15,6 +15,7 @@ public sealed class AppSettings
     public bool CheckForUpdates { get; set; } = true;
     public bool Muted { get; set; } = false;
     public MonitorPreference Monitor { get; set; } = MonitorPreference.FollowCursor;
+    public bool HasShownTrayHint { get; set; } = false;
 
     private static readonly string SettingsPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),

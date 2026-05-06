@@ -15,17 +15,35 @@ public sealed class SoundEngine : IDisposable
     private readonly MixingSampleProvider _cueMixer;
     private WaveOutEvent? _ambientOut;
     private bool _disposed;
+    private bool _cueStarted;
 
     public bool Muted { get; set; }
 
     public SoundEngine()
     {
+        // Mixer is cheap; the WaveOut device init is the slow bit and gets
+        // deferred to the first time we actually need to play a sound. Keeps
+        // app startup snappy.
         _cueMixer = new MixingSampleProvider(WaveFormat.CreateIeeeFloatWaveFormat(SampleRate, Channels))
         {
             ReadFully = true,
         };
-        _cueOut.Init(_cueMixer);
-        _cueOut.Play();
+    }
+
+    private void EnsureCueStarted()
+    {
+        if (_cueStarted || _disposed) return;
+        _cueStarted = true;
+        try
+        {
+            _cueOut.Init(_cueMixer);
+            _cueOut.Play();
+        }
+        catch
+        {
+            // No audio device or driver issue — leave _cueStarted true so we
+            // don't keep retrying.
+        }
     }
 
     public void PlayPrePing()
@@ -81,6 +99,7 @@ public sealed class SoundEngine : IDisposable
 
     private void AddTone(double freq, double volume, double duration, double delay, double vibratoHz = 0, double vibratoCents = 0)
     {
+        EnsureCueStarted();
         var tone = new EnvelopedToneProvider(SampleRate, Channels)
         {
             Frequency = freq,

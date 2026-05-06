@@ -32,10 +32,10 @@ public sealed partial class TrayFlyout : Window
     private DateTime _shownAt;
     private static readonly TimeSpan GracePeriod = TimeSpan.FromMilliseconds(250);
 
-    // When the flyout was last hidden. A tray click within this window after a
-    // hide is treated as "user is closing me" — don't reopen.
-    private DateTime _lastHiddenAt = DateTime.MinValue;
-    private static readonly TimeSpan ToggleDebounce = TimeSpan.FromMilliseconds(300);
+    // When the flyout was last auto-hidden by the foreground hook. A tray click
+    // racing with that auto-hide should "close" rather than re-open.
+    private DateTime _lastAutoHiddenAt = DateTime.MinValue;
+    private static readonly TimeSpan ToggleDebounce = TimeSpan.FromMilliseconds(500);
 
     public TrayFlyout()
     {
@@ -51,7 +51,6 @@ public sealed partial class TrayFlyout : Window
         Closed += OnClosed;
 
         UpdateUi();
-        WarmUp();
     }
 
     private void ConfigureChromeOnce()
@@ -83,8 +82,9 @@ public sealed partial class TrayFlyout : Window
     /// Pay the first-show cost up front: size and show the window fully off-screen,
     /// then hide. Forces DWM/Composition/Acrylic to fully initialise so the real
     /// first ShowAt() is instant instead of stuttering for ~half a second.
+    /// Caller decides when — at startup we defer this off the critical path.
     /// </summary>
-    private void WarmUp()
+    public void WarmUp()
     {
         if (_appWindow is null || _warmedUp) return;
         _warmedUp = true;
@@ -103,11 +103,15 @@ public sealed partial class TrayFlyout : Window
             HideQuiet();
             return false;
         }
-        // If we just hid (likely the tray click that triggered this also caused
-        // the foreground-change hook to fire and HideQuiet us), the user's
-        // intent is "close" — don't reopen.
-        if (DateTime.UtcNow - _lastHiddenAt < ToggleDebounce)
+        // The foreground hook may already have hidden us in response to the
+        // SAME tray click that's now invoking the toggle. In that case the
+        // user's intent is "close" — don't reopen. We only honour the
+        // debounce when the hide came from the auto-hide path; explicit
+        // user-initiated hides (button presses) leave _lastAutoHiddenAt
+        // untouched so re-clicking the tray can immediately reopen.
+        if (DateTime.UtcNow - _lastAutoHiddenAt < ToggleDebounce)
         {
+            _lastAutoHiddenAt = DateTime.MinValue;
             return false;
         }
         ShowAt();
@@ -142,11 +146,13 @@ public sealed partial class TrayFlyout : Window
         InstallForegroundHook();
     }
 
-    public void HideQuiet()
+    public void HideQuiet() => HideInternal(autoHide: false);
+
+    private void HideInternal(bool autoHide)
     {
         if (!_isVisible) return;
         _isVisible = false;
-        _lastHiddenAt = DateTime.UtcNow;
+        if (autoHide) _lastAutoHiddenAt = DateTime.UtcNow;
         UninstallForegroundHook();
         try { _appWindow?.Hide(); } catch { /* window may be tearing down */ }
     }
@@ -196,7 +202,7 @@ public sealed partial class TrayFlyout : Window
                     if (!_isVisible) return;
                     if (DateTime.UtcNow - _shownAt < GracePeriod) return;
                     if (hwnd == ownHwnd) return;
-                    HideQuiet();
+                    HideInternal(autoHide: true);
                 }
                 catch
                 {
