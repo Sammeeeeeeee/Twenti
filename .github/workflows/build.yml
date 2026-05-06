@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
     tags: ['v*']
+  release:
+    types: [published]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -73,7 +75,8 @@ jobs:
         run: |
           "### SHA-256 Checksums" > release_body.md
           '```text' >> release_body.md
-          Get-FileHash publish/Twenti.exe, installer/Output/Twenti-Setup.exe -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $([System.IO.Path]::GetFileName($_.Path))" } >> release_body.md
+          Get-FileHash publish/Twenti.exe, installer/Output/Twenti-Setup.exe -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLower())  $([System.IO.Path]::GetFileName($_.Path))" } >> release_body.md
           '```' >> release_body.md
 
       - name: Publish release
