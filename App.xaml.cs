@@ -52,7 +52,10 @@ public partial class App : Application
         _trayIcon = new TaskbarIcon
         {
             ToolTipText = "",
-            ContextMenuMode = ContextMenuMode.PopupMenu,
+            // SecondWindow hosts a real WinUI MenuFlyout — we need this so
+            // Click handlers and ToggleMenuFlyoutItem.IsChecked behave
+            // normally. PopupMenu mode strips the Click events.
+            ContextMenuMode = ContextMenuMode.SecondWindow,
             // Without this, H.NotifyIcon waits ~500ms for a possible
             // double-click before firing the single-click command. That
             // delay is what was making the click-to-close race with the
@@ -66,7 +69,14 @@ public partial class App : Application
         StateMachine.PropertyChanged += (_, _) => UIQueue.TryEnqueue(RefreshTray);
         StateMachine.PhaseChanged += OnPhaseChanged;
         StateMachine.BreakCompleted += (_, _) => UIQueue.TryEnqueue(Sound.PlayBreakComplete);
-        Theme.ThemeChanged += (_, _) => UIQueue.TryEnqueue(RefreshTray);
+        Theme.ThemeChanged += (_, _) => UIQueue.TryEnqueue(() =>
+        {
+            RefreshTray();
+            // SecondWindow ContextMenuMode hosts the menu in a separate window
+            // that doesn't inherit the app's theme — rebuild so the new
+            // RequestedTheme on each item picks up the right brushes.
+            if (_trayIcon is not null) _trayIcon.ContextFlyout = BuildContextMenu();
+        });
 
         SystemEvents.SessionSwitch += OnSessionSwitch;
         SystemEvents.PowerModeChanged += OnPowerModeChanged;
@@ -150,26 +160,43 @@ public partial class App : Application
     private MenuFlyout BuildContextMenu()
     {
         var menu = new MenuFlyout();
+        var theme = Theme.IsDark ? ElementTheme.Dark : ElementTheme.Light;
+
+        // SecondWindow mode hosts the menu in a separate window that doesn't
+        // inherit the app theme, and its auto-width measurement was clipping
+        // the longer items by ~1 character. Setting RequestedTheme on each
+        // item fixes the brushes; setting MinWidth gives the host enough
+        // headroom to render the longest label ("Check for updates now").
+        const double MenuMinWidth = 240;
+        void Style(MenuFlyoutItemBase item)
+        {
+            item.RequestedTheme = theme;
+            item.MinWidth = MenuMinWidth;
+        }
 
         foreach (var mins in new[] { 5, 15, 30 })
         {
             var item = new MenuFlyoutItem { Text = $"Snooze {mins} minutes" };
             item.Click += (_, _) => StateMachine.Snooze(mins);
+            Style(item);
             menu.Items.Add(item);
         }
-        menu.Items.Add(new MenuFlyoutSeparator());
+        var sep1 = new MenuFlyoutSeparator(); Style(sep1); menu.Items.Add(sep1);
 
         var monitorMenu = new MenuFlyoutSubItem { Text = "Show popup on" };
+        Style(monitorMenu);
         var followCursor = new ToggleMenuFlyoutItem
         {
             Text = "The monitor with my cursor",
             IsChecked = Settings.Monitor == MonitorPreference.FollowCursor,
         };
+        Style(followCursor);
         var mainMonitor = new ToggleMenuFlyoutItem
         {
             Text = "Main monitor only",
             IsChecked = Settings.Monitor == MonitorPreference.MainMonitor,
         };
+        Style(mainMonitor);
         followCursor.Click += (_, _) =>
         {
             Settings.Monitor = MonitorPreference.FollowCursor;
@@ -195,6 +222,7 @@ public partial class App : Application
             Settings.Muted = muteItem.IsChecked;
             Settings.Save();
         };
+        Style(muteItem);
         menu.Items.Add(muteItem);
 
         var autoStart = new ToggleMenuFlyoutItem
@@ -203,9 +231,10 @@ public partial class App : Application
             IsChecked = AutoStart.IsEnabled,
         };
         autoStart.Click += (_, _) => AutoStart.SetEnabled(autoStart.IsChecked);
+        Style(autoStart);
         menu.Items.Add(autoStart);
 
-        menu.Items.Add(new MenuFlyoutSeparator());
+        var sep2 = new MenuFlyoutSeparator(); Style(sep2); menu.Items.Add(sep2);
 
         var updateToggle = new ToggleMenuFlyoutItem
         {
@@ -217,16 +246,23 @@ public partial class App : Application
             Settings.CheckForUpdates = updateToggle.IsChecked;
             Settings.Save();
         };
+        Style(updateToggle);
         menu.Items.Add(updateToggle);
 
         var checkNow = new MenuFlyoutItem { Text = "Check for updates now" };
         checkNow.Click += async (_, _) => await CheckForUpdatesAsync(silentIfNone: false);
+        Style(checkNow);
         menu.Items.Add(checkNow);
 
-        menu.Items.Add(new MenuFlyoutSeparator());
+        var sep3 = new MenuFlyoutSeparator(); Style(sep3); menu.Items.Add(sep3);
 
-        var quit = new MenuFlyoutItem { Text = "Quit Twenti" };
+        var quit = new MenuFlyoutItem
+        {
+            Text = "Quit Twenti",
+            Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.IndianRed),
+        };
         quit.Click += (_, _) => Quit();
+        Style(quit);
         menu.Items.Add(quit);
 
         return menu;
