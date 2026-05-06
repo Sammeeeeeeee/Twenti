@@ -1,7 +1,6 @@
 using System;
 using System.ComponentModel;
 using Microsoft.UI;
-using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
@@ -18,16 +17,25 @@ public sealed partial class TrayFlyout : Window
     private IntPtr _hwnd;
     private double _scale = 1.0;
     private bool _isVisible;
+    private bool _warmedUp;
 
-    // Foreground-change hook. We keep a strong reference to the delegate so the
-    // GC doesn't reclaim it while the OS still has the function pointer.
+    private const int LogicalWidth  = 280;
+    private const int LogicalHeight = 165;
+
+    // Foreground-change hook. Strong reference to the delegate keeps it pinned
+    // for the OS while we hold the function pointer.
     private IntPtr _hook = IntPtr.Zero;
     private Win32Helper.WinEventCallback? _hookProc;
 
-    // Brief grace period right after Show() — Windows may not have made us the
-    // foreground window yet, and we don't want to immediately self-dismiss.
+    // Brief grace period right after Show() — we may not be foreground yet,
+    // so don't self-dismiss on the activation churn.
     private DateTime _shownAt;
     private static readonly TimeSpan GracePeriod = TimeSpan.FromMilliseconds(250);
+
+    // When the flyout was last hidden. A tray click within this window after a
+    // hide is treated as "user is closing me" — don't reopen.
+    private DateTime _lastHiddenAt = DateTime.MinValue;
+    private static readonly TimeSpan ToggleDebounce = TimeSpan.FromMilliseconds(300);
 
     public TrayFlyout()
     {
@@ -40,9 +48,10 @@ public sealed partial class TrayFlyout : Window
         ConfigureChromeOnce();
 
         _sm.PropertyChanged += OnStateChanged;
+        Closed += OnClosed;
 
         UpdateUi();
-        _appWindow?.Hide();
+        WarmUp();
     }
 
     private void ConfigureChromeOnce()
@@ -56,8 +65,6 @@ public sealed partial class TrayFlyout : Window
             p.IsMaximizable = false;
             p.IsMinimizable = false;
             p.IsResizable = false;
-            // Topmost so it draws above the user's app windows when shown.
-            // The foreground-change hook below handles dismissal.
             p.IsAlwaysOnTop = true;
             p.SetBorderAndTitleBar(false, false);
         }
@@ -72,16 +79,49 @@ public sealed partial class TrayFlyout : Window
         _scale = Win32Helper.GetDpiScale(_hwnd);
     }
 
+    /// <summary>
+    /// Pay the first-show cost up front: size and show the window fully off-screen,
+    /// then hide. Forces DWM/Composition/Acrylic to fully initialise so the real
+    /// first ShowAt() is instant instead of stuttering for ~half a second.
+    /// </summary>
+    private void WarmUp()
+    {
+        if (_appWindow is null || _warmedUp) return;
+        _warmedUp = true;
+
+        int width  = (int)Math.Round(LogicalWidth  * _scale);
+        int height = (int)Math.Round(LogicalHeight * _scale);
+        _appWindow.MoveAndResize(new RectInt32(-32000, -32000, width, height));
+        _appWindow.Show(activateWindow: false);
+        _appWindow.Hide();
+    }
+
+    public bool ToggleAt()
+    {
+        if (_isVisible)
+        {
+            HideQuiet();
+            return false;
+        }
+        // If we just hid (likely the tray click that triggered this also caused
+        // the foreground-change hook to fire and HideQuiet us), the user's
+        // intent is "close" — don't reopen.
+        if (DateTime.UtcNow - _lastHiddenAt < ToggleDebounce)
+        {
+            return false;
+        }
+        ShowAt();
+        return true;
+    }
+
     public void ShowAt()
     {
         if (_appWindow is null) return;
 
         UpdateUi();
 
-        const int logicalWidth  = 280;
-        const int logicalHeight = 165;
-        int width  = (int)Math.Round(logicalWidth  * _scale);
-        int height = (int)Math.Round(logicalHeight * _scale);
+        int width  = (int)Math.Round(LogicalWidth  * _scale);
+        int height = (int)Math.Round(LogicalHeight * _scale);
 
         var workArea = App.Current.GetTargetDisplayArea().WorkArea;
         int margin = (int)Math.Round(12 * _scale);
@@ -91,10 +131,10 @@ public sealed partial class TrayFlyout : Window
         _appWindow.MoveAndResize(new RectInt32(x, y, width, height));
         _appWindow.Show(activateWindow: true);
 
-        // Drag ourselves to the foreground — necessary because the click came
-        // from the tray (Explorer.exe), so we don't automatically get focus.
-        Win32Helper.SetForegroundWindow(_hwnd);
-        Activate();
+        // Click came from the tray (Explorer.exe), so we don't auto-receive
+        // focus. Drag ourselves to the foreground.
+        try { Win32Helper.SetForegroundWindow(_hwnd); } catch { /* best-effort */ }
+        try { Activate(); } catch { /* best-effort */ }
 
         _shownAt = DateTime.UtcNow;
         _isVisible = true;
@@ -104,10 +144,11 @@ public sealed partial class TrayFlyout : Window
 
     public void HideQuiet()
     {
-        if (!_isVisible || _appWindow is null) return;
+        if (!_isVisible) return;
         _isVisible = false;
+        _lastHiddenAt = DateTime.UtcNow;
         UninstallForegroundHook();
-        _appWindow.Hide();
+        try { _appWindow?.Hide(); } catch { /* window may be tearing down */ }
     }
 
     private void InstallForegroundHook()
@@ -127,7 +168,7 @@ public sealed partial class TrayFlyout : Window
     private void UninstallForegroundHook()
     {
         if (_hook == IntPtr.Zero) return;
-        Win32Helper.UnhookWinEvent(_hook);
+        try { Win32Helper.UnhookWinEvent(_hook); } catch { /* ignore */ }
         _hook = IntPtr.Zero;
         _hookProc = null;
     }
@@ -135,16 +176,44 @@ public sealed partial class TrayFlyout : Window
     private void OnForegroundChanged(IntPtr hWinEventHook, uint eventType,
         IntPtr hwnd, int idObject, int idChild, uint dwEventThread, uint dwmsEventTime)
     {
-        // Hook fires on a non-UI thread — bounce back to the dispatcher.
-        App.Current.UIQueue.TryEnqueue(() =>
+        // Hook fires on a non-UI thread, sometimes in storms (e.g. when the
+        // session is locking / system suspending). Keep this body ultra-cheap
+        // and bounce to the dispatcher inside a try/catch — a stray exception
+        // here propagates into CoreMessagingXP and fails-fast the whole
+        // process (seen in the wild as 0xc000027b).
+        try
         {
-            if (!_isVisible) return;
-            // Ignore foreground changes during the grace period after show, so
-            // we don't dismiss before SetForegroundWindow has taken effect.
-            if (DateTime.UtcNow - _shownAt < GracePeriod) return;
-            // Hide whenever any window other than ourselves becomes foreground.
-            if (hwnd != _hwnd) HideQuiet();
-        });
+            var app = App.Current;
+            if (app is null) return;
+            var queue = app.UIQueue;
+            if (queue is null) return;
+            var ownHwnd = _hwnd;
+
+            queue.TryEnqueue(() =>
+            {
+                try
+                {
+                    if (!_isVisible) return;
+                    if (DateTime.UtcNow - _shownAt < GracePeriod) return;
+                    if (hwnd == ownHwnd) return;
+                    HideQuiet();
+                }
+                catch
+                {
+                    // Last-ditch swallow: failing here would crash the app.
+                }
+            });
+        }
+        catch
+        {
+            // Same: the OS is still holding our function pointer; never throw.
+        }
+    }
+
+    private void OnClosed(object sender, WindowEventArgs args)
+    {
+        UninstallForegroundHook();
+        _sm.PropertyChanged -= OnStateChanged;
     }
 
     private void OnStateChanged(object? sender, PropertyChangedEventArgs e)
@@ -184,7 +253,7 @@ public sealed partial class TrayFlyout : Window
         }
 
         double width = Root.ActualWidth - 24;
-        if (width < 1) width = 280 - 24;
+        if (width < 1) width = LogicalWidth - 24;
         double pct = Math.Clamp(leftSec / (double)totalSec, 0, 1);
         ProgressFill.Width = pct * width;
     }

@@ -121,6 +121,14 @@ public sealed class BreakStateMachine : INotifyPropertyChanged
         _timer = null;
     }
 
+    /// <summary>
+    /// Freezes the countdown — used when the session locks or the system
+    /// suspends so the user doesn't lose their place / wake to a stale phase.
+    /// </summary>
+    public void Pause() => _timer?.Stop();
+
+    public void Resume() => _timer?.Start();
+
     private void ResetToWorking()
     {
         Phase = Phase.Working;

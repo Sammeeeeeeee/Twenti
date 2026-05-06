@@ -6,6 +6,7 @@ using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.Win32;
 using Twenti.Services;
 using Twenti.Views;
 
@@ -48,25 +49,27 @@ public partial class App : Application
         _trayIcon = new TaskbarIcon
         {
             ToolTipText = "",
-            ContextMenuMode = ContextMenuMode.SecondWindow,
+            // PopupMenu uses Win32 TrackPopupMenuEx — auto-sizes to text and
+            // repositions correctly near the screen edge (the SecondWindow
+            // mode was clipping "Snooze 15 minutes" / "Start with Windows"
+            // when the tray was on the right).
+            ContextMenuMode = ContextMenuMode.PopupMenu,
             ContextFlyout = BuildContextMenu(),
             LeftClickCommand = new RelayCommand(OnTrayLeftClick),
         };
         _trayIcon.ForceCreate();
 
         // Pre-create the flyout so the first tray click is instant —
-        // no XAML compilation or window-creation latency on demand.
+        // no XAML compilation or DWM init latency on demand.
         _flyout = new TrayFlyout();
 
         StateMachine.PropertyChanged += (_, _) => UIQueue.TryEnqueue(RefreshTray);
         StateMachine.PhaseChanged += OnPhaseChanged;
         StateMachine.BreakCompleted += (_, _) => UIQueue.TryEnqueue(Sound.PlayBreakComplete);
-        Theme.ThemeChanged += (_, _) => UIQueue.TryEnqueue(() =>
-        {
-            RefreshTray();
-            // Rebuild the context menu so its theme matches the new system theme.
-            if (_trayIcon is not null) _trayIcon.ContextFlyout = BuildContextMenu();
-        });
+        Theme.ThemeChanged += (_, _) => UIQueue.TryEnqueue(RefreshTray);
+
+        SystemEvents.SessionSwitch += OnSessionSwitch;
+        SystemEvents.PowerModeChanged += OnPowerModeChanged;
 
         StateMachine.Start();
         RefreshTray();
@@ -127,36 +130,26 @@ public partial class App : Application
     private MenuFlyout BuildContextMenu()
     {
         var menu = new MenuFlyout();
-        // ContextMenuMode.SecondWindow hosts the flyout in a separate window which
-        // doesn't inherit the app theme; set it on each item so the rendered
-        // FrameworkElements pick up the right brushes.
-        var theme = Theme.IsDark ? ElementTheme.Dark : ElementTheme.Light;
-        void Themed(MenuFlyoutItemBase item) => item.RequestedTheme = theme;
 
         foreach (var mins in new[] { 5, 15, 30 })
         {
             var item = new MenuFlyoutItem { Text = $"Snooze {mins} minutes" };
             item.Click += (_, _) => StateMachine.Snooze(mins);
-            Themed(item);
             menu.Items.Add(item);
         }
-        var sep1 = new MenuFlyoutSeparator(); Themed(sep1); menu.Items.Add(sep1);
+        menu.Items.Add(new MenuFlyoutSeparator());
 
-        // ── Monitor placement submenu ──
         var monitorMenu = new MenuFlyoutSubItem { Text = "Show popup on" };
-        Themed(monitorMenu);
         var followCursor = new ToggleMenuFlyoutItem
         {
             Text = "The monitor with my cursor",
             IsChecked = Settings.Monitor == MonitorPreference.FollowCursor,
         };
-        Themed(followCursor);
         var mainMonitor = new ToggleMenuFlyoutItem
         {
             Text = "Main monitor only",
             IsChecked = Settings.Monitor == MonitorPreference.MainMonitor,
         };
-        Themed(mainMonitor);
         followCursor.Click += (_, _) =>
         {
             Settings.Monitor = MonitorPreference.FollowCursor;
@@ -182,7 +175,6 @@ public partial class App : Application
             Settings.Muted = muteItem.IsChecked;
             Settings.Save();
         };
-        Themed(muteItem);
         menu.Items.Add(muteItem);
 
         var autoStart = new ToggleMenuFlyoutItem
@@ -191,10 +183,9 @@ public partial class App : Application
             IsChecked = AutoStart.IsEnabled,
         };
         autoStart.Click += (_, _) => AutoStart.SetEnabled(autoStart.IsChecked);
-        Themed(autoStart);
         menu.Items.Add(autoStart);
 
-        var sep2 = new MenuFlyoutSeparator(); Themed(sep2); menu.Items.Add(sep2);
+        menu.Items.Add(new MenuFlyoutSeparator());
 
         var updateToggle = new ToggleMenuFlyoutItem
         {
@@ -206,24 +197,16 @@ public partial class App : Application
             Settings.CheckForUpdates = updateToggle.IsChecked;
             Settings.Save();
         };
-        Themed(updateToggle);
         menu.Items.Add(updateToggle);
 
         var checkNow = new MenuFlyoutItem { Text = "Check for updates now" };
         checkNow.Click += async (_, _) => await CheckForUpdatesAsync(silentIfNone: false);
-        Themed(checkNow);
         menu.Items.Add(checkNow);
 
-        var sep3 = new MenuFlyoutSeparator(); Themed(sep3); menu.Items.Add(sep3);
+        menu.Items.Add(new MenuFlyoutSeparator());
 
-        var quit = new MenuFlyoutItem
-        {
-            Text = "Quit Twenti",
-            Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(
-                Microsoft.UI.Colors.IndianRed),
-        };
+        var quit = new MenuFlyoutItem { Text = "Quit Twenti" };
         quit.Click += (_, _) => Quit();
-        Themed(quit);
         menu.Items.Add(quit);
 
         return menu;
@@ -238,13 +221,18 @@ public partial class App : Application
                 ShowOrFocusPopup();
                 return;
             }
-            ShowFlyout();
+            ToggleFlyout();
         });
+    }
+
+    private void ToggleFlyout()
+    {
+        _flyout ??= new TrayFlyout();
+        _flyout.ToggleAt();
     }
 
     private void ShowFlyout()
     {
-        // Window already exists from OnLaunched — just reposition + show.
         _flyout ??= new TrayFlyout();
         _flyout.ShowAt();
     }
@@ -280,6 +268,48 @@ public partial class App : Application
         });
     }
 
+    private void OnSessionSwitch(object? sender, SessionSwitchEventArgs e)
+    {
+        // Lock/unlock and remote-disconnect/connect should freeze the timer
+        // — the user is away from the screen so the countdown is meaningless.
+        switch (e.Reason)
+        {
+            case SessionSwitchReason.SessionLock:
+            case SessionSwitchReason.ConsoleDisconnect:
+            case SessionSwitchReason.RemoteDisconnect:
+                UIQueue.TryEnqueue(() =>
+                {
+                    StateMachine.Pause();
+                    _flyout?.HideQuiet();
+                    HidePopup();
+                });
+                break;
+            case SessionSwitchReason.SessionUnlock:
+            case SessionSwitchReason.ConsoleConnect:
+            case SessionSwitchReason.RemoteConnect:
+                UIQueue.TryEnqueue(StateMachine.Resume);
+                break;
+        }
+    }
+
+    private void OnPowerModeChanged(object? sender, PowerModeChangedEventArgs e)
+    {
+        switch (e.Mode)
+        {
+            case PowerModes.Suspend:
+                UIQueue.TryEnqueue(() =>
+                {
+                    StateMachine.Pause();
+                    _flyout?.HideQuiet();
+                    HidePopup();
+                });
+                break;
+            case PowerModes.Resume:
+                UIQueue.TryEnqueue(StateMachine.Resume);
+                break;
+        }
+    }
+
     private void ShowOrFocusPopup()
     {
         if (_popup is null)
@@ -305,6 +335,8 @@ public partial class App : Application
 
     public void Quit()
     {
+        SystemEvents.SessionSwitch -= OnSessionSwitch;
+        SystemEvents.PowerModeChanged -= OnPowerModeChanged;
         StateMachine.Stop();
         Sound.Dispose();
         _trayIcon?.Dispose();
