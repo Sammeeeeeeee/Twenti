@@ -349,22 +349,24 @@ public partial class App : Application
 
     private void OnTrayLeftClick()
     {
-        // H.NotifyIcon's LeftClickCommand fires on the dispatcher thread; run
-        // synchronously when we can so ToggleAt() executes BEFORE any hide
-        // that the deactivation handler queued in response to the same
-        // click. Going through TryEnqueue here put toggles BEHIND that hide
-        // and made the click look like it did nothing. Wrap in try/catch
-        // because H.NotifyIcon's command invoker doesn't gracefully swallow
-        // exceptions, and a throw here would fail-fast the whole app.
+        // Capture user intent NOW, synchronously, before anything else gets
+        // a chance to flip _flyout._isVisible. The previous code called
+        // ToggleAt() inside the queued handler, which raced against the
+        // foreground hook's queued auto-hide: if the hook lambda ran first,
+        // it hid the popup, then the click's ToggleAt saw _isVisible=false
+        // and *re-opened* it — looking to the user like the click "did
+        // nothing". By snapshotting visibility here we know what the user
+        // saw and we apply the matching action regardless of queue order.
+        bool flyoutVisibleAtClick = _flyout?.IsVisible ?? false;
         try
         {
             if (UIQueue.HasThreadAccess)
             {
-                HandleTrayLeftClick();
+                HandleTrayLeftClick(flyoutVisibleAtClick);
             }
             else
             {
-                UIQueue.TryEnqueue(HandleTrayLeftClick);
+                UIQueue.TryEnqueue(() => HandleTrayLeftClick(flyoutVisibleAtClick));
             }
         }
         catch
@@ -373,7 +375,7 @@ public partial class App : Application
         }
     }
 
-    private void HandleTrayLeftClick()
+    private void HandleTrayLeftClick(bool flyoutVisibleAtClick)
     {
         // Phase 2 hasn't finished — swallow rather than NRE through
         // StateMachine / Settings / _flyout. The icon is already painting
@@ -384,7 +386,18 @@ public partial class App : Application
             ShowOrFocusPopup();
             return;
         }
-        ToggleFlyout();
+        if (flyoutVisibleAtClick)
+        {
+            // User saw an open flyout and clicked the icon — close, full stop.
+            // HideQuiet is idempotent; if the foreground hook also hid us,
+            // this is a no-op rather than a reopen.
+            _flyout?.HideQuiet();
+        }
+        else
+        {
+            _flyout ??= new TrayFlyout();
+            _flyout.ShowAt();
+        }
     }
 
     private void ToggleFlyout()

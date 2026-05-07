@@ -211,6 +211,47 @@ internal static class Win32Helper
     [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)]
     private static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
 
+    /// <summary>
+    /// True if the given HWND, or any of its top-level ancestors, is one of
+    /// the shell taskbar/notification windows ("Shell_TrayWnd",
+    /// "Shell_SecondaryTrayWnd", "NotifyIconOverflowWindow"). Used by the
+    /// flyout's foreground hook to skip auto-hiding when the foreground
+    /// briefly switches to the tray during a tray click — the click's own
+    /// handler will toggle visibility, and we don't want to fight it.
+    /// </summary>
+    public static bool IsShellTrayWindow(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return false;
+        var name = GetClassNameOf(hwnd);
+        if (IsTrayClassName(name)) return true;
+        // Walk to the top-level owner — clicks on tray children (toolbar
+        // buttons, the clock, the chevron) all live under Shell_TrayWnd.
+        var root = GetAncestor(hwnd, GA_ROOT);
+        if (root != IntPtr.Zero && root != hwnd && IsTrayClassName(GetClassNameOf(root))) return true;
+        return false;
+    }
+
+    private static bool IsTrayClassName(string? name) =>
+        name == "Shell_TrayWnd"
+        || name == "Shell_SecondaryTrayWnd"
+        || name == "NotifyIconOverflowWindow"
+        || name == "TopLevelWindowForOverflowXamlIsland";
+
+    private static string? GetClassNameOf(IntPtr hwnd)
+    {
+        var sb = new System.Text.StringBuilder(256);
+        int n = GetClassName(hwnd, sb, sb.Capacity);
+        return n > 0 ? sb.ToString() : null;
+    }
+
+    private const uint GA_ROOT = 2;
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder lpClassName, int nMaxCount);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
+
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter,
         int X, int Y, int cx, int cy, uint uFlags);

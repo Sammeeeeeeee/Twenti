@@ -1,5 +1,6 @@
 using System;
 using System.ComponentModel;
+using System.Threading.Tasks;
 using Microsoft.UI;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
@@ -104,6 +105,13 @@ public sealed partial class TrayFlyout : Window
         _appWindow.Hide();
     }
 
+    /// <summary>
+    /// True iff the flyout window is currently shown. Read-only snapshot so
+    /// the tray-click handler in App.xaml.cs can capture user intent at the
+    /// click instant, before any queued hide/show races change the state.
+    /// </summary>
+    public bool IsVisible => _isVisible;
+
     public bool ToggleAt()
     {
         if (_isVisible)
@@ -158,6 +166,46 @@ public sealed partial class TrayFlyout : Window
         Win32Helper.ForceForegroundWindow(_hwnd);
 
         InstallForegroundHook();
+        ScheduleGraceRecheck();
+    }
+
+    /// <summary>
+    /// One-shot foreground check that fires just past the grace period.
+    /// The grace window suppresses the foreground hook so spurious activation
+    /// churn during ShowAt doesn't immediately self-dismiss us — but if the
+    /// user clicks elsewhere INSIDE that window, the hook fired, the lambda
+    /// returned without hiding, and no further hook fires until something
+    /// else changes foreground. The popup then sits open behind whatever the
+    /// user is doing. This recheck closes that gap: if, just after grace
+    /// expires, the foreground isn't us and isn't the tray, hide.
+    /// </summary>
+    private void ScheduleGraceRecheck()
+    {
+        var ui = (Application.Current as App)?.UIQueue;
+        if (ui is null) return;
+        int seq = _showSequence;
+        IntPtr ownHwnd = _hwnd;
+        var delay = GracePeriod + TimeSpan.FromMilliseconds(50);
+
+        _ = Task.Delay(delay).ContinueWith(_ =>
+        {
+            ui.TryEnqueue(() =>
+            {
+                try
+                {
+                    if (_showSequence != seq) return;
+                    if (!_isVisible) return;
+                    IntPtr fg = Win32Helper.GetForegroundWindow();
+                    if (fg == ownHwnd) return;
+                    if (Win32Helper.IsShellTrayWindow(fg)) return;
+                    HideInternal(autoHide: true);
+                }
+                catch
+                {
+                    // Don't crash the app on a teardown race.
+                }
+            });
+        }, TaskScheduler.Default);
     }
 
     public void HideQuiet() => HideInternal(autoHide: false);
@@ -217,10 +265,19 @@ public sealed partial class TrayFlyout : Window
                     // running — leaving the lambda would kill the new popup.
                     if (_showSequence != seq) return;
                     if (!_isVisible) return;
-                    if (DateTime.UtcNow - _shownAt < GracePeriod) return;
                     // The activated window IS us — we just took foreground
                     // (e.g. via ForceForegroundWindow). Don't self-dismiss.
                     if (hwnd == ownHwnd) return;
+                    // The activation went to the tray (Shell_TrayWnd or one
+                    // of its kin) — that means the user clicked our tray
+                    // icon, and the click handler will toggle visibility
+                    // synchronously. If we hide here, the click handler
+                    // would then see _isVisible=false and reopen us, making
+                    // the click look like it did nothing (the original
+                    // "75% of clicks don't close" report). Let the click
+                    // handler win.
+                    if (Win32Helper.IsShellTrayWindow(hwnd)) return;
+                    if (DateTime.UtcNow - _shownAt < GracePeriod) return;
                     HideInternal(autoHide: true);
                 }
                 catch
