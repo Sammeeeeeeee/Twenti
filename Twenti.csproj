@@ -5,6 +5,7 @@
     <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
     <RootNamespace>Twenti</RootNamespace>
+    <AssemblyName>Twenti</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Platforms>x64;arm64</Platforms>
     <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
@@ -17,6 +18,21 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
     <ApplicationIcon>installer\app.ico</ApplicationIcon>
+
+    <!-- Version info embedded in the binary so:
+         (a) right-click → Properties → Details shows the right version,
+         (b) UpdateChecker's Assembly.GetName().Version is non-zero,
+         (c) the GitHub releases tag comparison actually works.
+         CI overrides <Version> from the git tag (`-p:Version=1.2.3`) so
+         this number only matters for local/dev builds. Keep it bumped in
+         lock-step with releases anyway, otherwise a locally-built EXE
+         will report a stale "newer version available". -->
+    <Version>1.1.0</Version>
+    <Product>Twenti</Product>
+    <AssemblyTitle>Twenti</AssemblyTitle>
+    <Company>Twenti</Company>
+    <Description>20/20 eye-break reminder for Windows.</Description>
+    <Copyright>Copyright © Twenti</Copyright>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">

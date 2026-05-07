@@ -22,20 +22,28 @@ public sealed partial class TrayFlyout : Window
     private const int LogicalWidth  = 280;
     private const int LogicalHeight = 165;
 
-    // Foreground-change hook. Strong reference to the delegate keeps it pinned
-    // for the OS while we hold the function pointer.
+    // Global foreground-change hook. Strong reference to the delegate keeps
+    // it pinned for the OS while we hold the function pointer.
+    //
+    // Why a global hook (SetWinEventHook) instead of WinUI's Window.Activated:
+    // a popup-style window with WS_POPUP + WS_EX_TOOLWINDOW does not reliably
+    // receive Activated(Deactivated) events for foreground changes to other
+    // processes — clicks outside the flyout simply wouldn't dismiss it. The
+    // global hook fires on every foreground change in the session and is the
+    // mechanism that actually works for this window class.
     private IntPtr _hook = IntPtr.Zero;
     private Win32Helper.WinEventCallback? _hookProc;
 
-    // Brief grace period right after Show() — we may not be foreground yet,
-    // so don't self-dismiss on the activation churn.
+    // Brief grace period right after Show() — we may not be foreground yet
+    // and a stray foreground-change for the activation churn would
+    // self-dismiss us before the user even sees the flyout.
     private DateTime _shownAt;
     private static readonly TimeSpan GracePeriod = TimeSpan.FromMilliseconds(250);
 
-    // When the flyout was last auto-hidden by the foreground hook. A tray click
-    // racing with that auto-hide should "close" rather than re-open.
-    private DateTime _lastAutoHiddenAt = DateTime.MinValue;
-    private static readonly TimeSpan ToggleDebounce = TimeSpan.FromMilliseconds(500);
+    // Monotonic counter incremented on every Show. Stale auto-hide callbacks
+    // queued from the previous show capture the old sequence number; if a
+    // new ShowAt has happened in between, the queued hide bails.
+    private int _showSequence;
 
     public TrayFlyout()
     {
@@ -103,17 +111,6 @@ public sealed partial class TrayFlyout : Window
             HideQuiet();
             return false;
         }
-        // The foreground hook may already have hidden us in response to the
-        // SAME tray click that's now invoking the toggle. In that case the
-        // user's intent is "close" — don't reopen. We only honour the
-        // debounce when the hide came from the auto-hide path; explicit
-        // user-initiated hides (button presses) leave _lastAutoHiddenAt
-        // untouched so re-clicking the tray can immediately reopen.
-        if (DateTime.UtcNow - _lastAutoHiddenAt < ToggleDebounce)
-        {
-            _lastAutoHiddenAt = DateTime.MinValue;
-            return false;
-        }
         ShowAt();
         return true;
     }
@@ -124,24 +121,41 @@ public sealed partial class TrayFlyout : Window
 
         UpdateUi();
 
-        int width  = (int)Math.Round(LogicalWidth  * _scale);
-        int height = (int)Math.Round(LogicalHeight * _scale);
+        // Different monitors can have different DPI. Compute size in the
+        // *target* monitor's physical pixels — using the source monitor's
+        // scale would clip the flyout on higher-DPI displays.
+        var target = App.Current.GetTargetDisplayArea();
+        double scale = Win32Helper.GetDpiScaleForDisplayArea(target);
+        _scale = scale;
 
-        var workArea = App.Current.GetTargetDisplayArea().WorkArea;
-        int margin = (int)Math.Round(12 * _scale);
+        int width  = (int)Math.Round(LogicalWidth  * scale);
+        int height = (int)Math.Round(LogicalHeight * scale);
+
+        var workArea = target.WorkArea;
+        int margin = (int)Math.Round(12 * scale);
+
+        // Clamp to the work area: on small/rotated monitors at high DPI the
+        // flyout could otherwise spill past the screen edge.
+        width  = Math.Min(width,  Math.Max(1, workArea.Width  - 2 * margin));
+        height = Math.Min(height, Math.Max(1, workArea.Height - 2 * margin));
+
         int x = workArea.X + workArea.Width  - width  - margin;
         int y = workArea.Y + workArea.Height - height - margin;
 
         _appWindow.MoveAndResize(new RectInt32(x, y, width, height));
+
+        // Set timing/sequence fields BEFORE Show so any in-flight hook
+        // callbacks see the new _shownAt and skip via the grace period.
+        _shownAt = DateTime.UtcNow;
+        _isVisible = true;
+        unchecked { _showSequence++; }
+
         _appWindow.Show(activateWindow: true);
 
         // Click came from the tray (Explorer.exe), so we don't auto-receive
-        // focus. Drag ourselves to the foreground.
-        try { Win32Helper.SetForegroundWindow(_hwnd); } catch { /* best-effort */ }
+        // focus. Force ourselves up via the AttachThreadInput trick.
         try { Activate(); } catch { /* best-effort */ }
-
-        _shownAt = DateTime.UtcNow;
-        _isVisible = true;
+        Win32Helper.ForceForegroundWindow(_hwnd);
 
         InstallForegroundHook();
     }
@@ -152,7 +166,6 @@ public sealed partial class TrayFlyout : Window
     {
         if (!_isVisible) return;
         _isVisible = false;
-        if (autoHide) _lastAutoHiddenAt = DateTime.UtcNow;
         UninstallForegroundHook();
         try { _appWindow?.Hide(); } catch { /* window may be tearing down */ }
     }
@@ -189,18 +202,24 @@ public sealed partial class TrayFlyout : Window
         // process (seen in the wild as 0xc000027b).
         try
         {
-            var app = App.Current;
+            var app = Application.Current as App;
             if (app is null) return;
             var queue = app.UIQueue;
             if (queue is null) return;
             var ownHwnd = _hwnd;
+            int seq = _showSequence;
 
             queue.TryEnqueue(() =>
             {
                 try
                 {
+                    // A new ShowAt happened between the hook firing and this
+                    // running — leaving the lambda would kill the new popup.
+                    if (_showSequence != seq) return;
                     if (!_isVisible) return;
                     if (DateTime.UtcNow - _shownAt < GracePeriod) return;
+                    // The activated window IS us — we just took foreground
+                    // (e.g. via ForceForegroundWindow). Don't self-dismiss.
                     if (hwnd == ownHwnd) return;
                     HideInternal(autoHide: true);
                 }

@@ -60,10 +60,15 @@ public sealed partial class BreakPopup : Window
 
     public void BringToFrontAndFocus()
     {
-        // The popup is shown from a timer tick (no recent input), so Windows
-        // foreground-stealing rules can demote our Activate(). Force it.
-        try { Win32Helper.SetForegroundWindow(_hwnd); } catch { /* best-effort */ }
+        // Activate first so the window is actually on screen — without it,
+        // SetForegroundWindow has nothing visible to bring up. Then
+        // ForceForegroundWindow uses the AttachThreadInput trick to bypass
+        // foreground-lock (the popup is shown from a timer tick, not user
+        // input, so a plain SetForegroundWindow would get demoted to a
+        // taskbar flash and the user's Enter / 1-9 / Esc keystrokes would
+        // go to whatever window currently has focus instead of us).
         try { Activate(); } catch { /* best-effort */ }
+        Win32Helper.ForceForegroundWindow(_hwnd);
         Root.Focus(FocusState.Programmatic);
     }
 
@@ -99,11 +104,25 @@ public sealed partial class BreakPopup : Window
         if (_appWindow is null) return;
 
         int logicalHeight = _sm.Phase == Phase.Alert ? LogicalAlertHeight : LogicalTimerHeight;
-        int width  = (int)Math.Round(LogicalWidth   * _scale);
-        int height = (int)Math.Round(logicalHeight  * _scale);
 
-        // True center of the user-preferred monitor (cursor's, or main).
-        var workArea = App.Current.GetTargetDisplayArea().WorkArea;
+        // The window may currently live on the primary monitor (where it was
+        // first created off-screen) but we're about to move it onto a
+        // user-selected monitor with potentially different DPI. Compute size
+        // in the *target* monitor's physical pixels, otherwise the WinUI
+        // content gets clipped on higher-DPI displays.
+        var target = App.Current.GetTargetDisplayArea();
+        double scale = Win32Helper.GetDpiScaleForDisplayArea(target);
+        _scale = scale;
+        int width  = (int)Math.Round(LogicalWidth   * scale);
+        int height = (int)Math.Round(logicalHeight  * scale);
+
+        var workArea = target.WorkArea;
+        // Defensive clamp: if the popup is taller/wider than the target
+        // monitor's work area (unusual: small portrait monitor + 200% DPI),
+        // shrink to fit so nothing gets clipped off-screen.
+        width  = Math.Min(width,  Math.Max(1, workArea.Width));
+        height = Math.Min(height, Math.Max(1, workArea.Height));
+
         int x = workArea.X + (workArea.Width  - width)  / 2;
         int y = workArea.Y + (workArea.Height - height) / 2;
         _appWindow.MoveAndResize(new RectInt32(x, y, width, height));
