@@ -1,7 +1,6 @@
 using System;
 using System.Diagnostics;
 using System.IO;
-using System.Runtime.ExceptionServices;
 using System.Threading;
 
 namespace Twenti.Services;
@@ -39,30 +38,18 @@ public static class Logger
     /// </summary>
     public static void Breadcrumb(string action) => Write("CRMB", action);
 
-    private static int _firstChanceInstalled;
+    private static int _processExitInstalled;
 
     /// <summary>
-    /// Subscribe to FirstChanceException so even handled exceptions show
-    /// up in the log. Call once at startup. Throttled to avoid runaway
-    /// logging if an exception fires per tick.
+    /// Subscribe to ProcessExit so the log shows clean shutdowns. We do
+    /// NOT hook FirstChanceException — WinRT/WinUI throw a constant stream
+    /// of caught-internally exceptions during click/menu/render paths, and
+    /// serialising every one of them through the log's file lock made the
+    /// tray icon feel debounced by ~2 seconds per click.
     /// </summary>
     public static void InstallFirstChanceLogging()
     {
-        if (Interlocked.Exchange(ref _firstChanceInstalled, 1) == 1) return;
-
-        AppDomain.CurrentDomain.FirstChanceException += (_, e) =>
-        {
-            // Skip the noise: TaskCanceledException, OperationCanceledException
-            // and the like fire on every cancelled HTTP timeout etc.
-            var ex = e.Exception;
-            if (ex is OperationCanceledException) return;
-            try
-            {
-                Write("FCE ", $"{ex.GetType().Name}: {ex.Message}");
-            }
-            catch { /* never let logging crash the app */ }
-        };
-
+        if (Interlocked.Exchange(ref _processExitInstalled, 1) == 1) return;
         AppDomain.CurrentDomain.ProcessExit += (_, _) =>
         {
             try { Write("INFO", "Process exiting."); } catch { }

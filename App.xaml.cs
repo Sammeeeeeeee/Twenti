@@ -27,6 +27,7 @@ public partial class App : Application
     private MainWindow? _ownerWindow;
     private BreakPopup? _popup;
     private TrayFlyout? _flyout;
+    private ContextMenuHost? _contextMenuHost;
     private bool _ready;
 
     // Cached so RefreshTray can run before ThemeListener is initialized
@@ -69,9 +70,20 @@ public partial class App : Application
             {
                 Icon = initialIcon,
                 ToolTipText = StateMachine.TooltipText,
-                ContextMenuMode = ContextMenuMode.SecondWindow,
                 NoLeftClickDelay = true,
                 LeftClickCommand = new RelayCommand(OnTrayLeftClick),
+                // We deliberately do NOT set ContextFlyout. H.NotifyIcon's
+                // SecondWindow ContextMenuMode (the only one that gives the
+                // Fluent look) installs a Win32 SUBCLASSPROC delegate that
+                // gets GC'd, leading to COR_E_EXECUTIONENGINE FailFast on
+                // unrelated window messages. PopupMenu mode avoids the
+                // crash but renders a native Win32 menu.
+                //
+                // Instead we handle right-click ourselves via
+                // RightClickCommand and show the same MenuFlyout inside our
+                // own ContextMenuHost window — same Fluent visuals, no
+                // library subclass involvement.
+                RightClickCommand = new RelayCommand(OnTrayRightClick),
             };
             _trayIcon.ForceCreate();
 
@@ -108,16 +120,12 @@ public partial class App : Application
             StateMachine.BreakCompleted += (_, _) => UIQueue.TryEnqueue(Sound.PlayBreakComplete);
             StateMachine.Start();
 
-            if (_trayIcon is not null)
-            {
-                _trayIcon.ContextFlyout = BuildContextMenu();
-            }
-
             Theme.ThemeChanged += (_, _) => UIQueue.TryEnqueue(() =>
             {
                 _isDarkCache = Theme.IsDark;
                 RefreshTray();
-                if (_trayIcon is not null) _trayIcon.ContextFlyout = BuildContextMenu();
+                // The right-click menu rebuilds on each open, so theme
+                // changes get picked up automatically — no rebuild here.
             });
 
             SystemEvents.SessionSwitch += OnSessionSwitch;
@@ -204,7 +212,6 @@ public partial class App : Application
                 if (!silentIfNone) ShowToast("You're on the latest version.");
                 _pendingUpdateUrl = null;
                 _pendingUpdateVersion = null;
-                if (_trayIcon is not null) _trayIcon.ContextFlyout = BuildContextMenu();
                 return;
             }
 
@@ -212,7 +219,6 @@ public partial class App : Application
 
             _pendingUpdateUrl = info.ReleaseUrl;
             _pendingUpdateVersion = info.LatestVersion;
-            _trayIcon.ContextFlyout = BuildContextMenu();
             _trayIcon.ShowNotification(
                 title: $"Twenti {info.LatestVersion} is available",
                 message: "Right-click the tray icon → \"Download update\" to open the release page.",
@@ -276,7 +282,7 @@ public partial class App : Application
             var url = _pendingUpdateUrl;
             var update = new MenuFlyoutItem
             {
-                Text = $"Download update {_pendingUpdateVersion} →",
+                Text = $"Download update {_pendingUpdateVersion}",
                 Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.SteelBlue),
             };
             update.Click += (_, _) => OpenUrl(url);
@@ -326,8 +332,6 @@ public partial class App : Application
         monitorMenu.Items.Add(mainMonitor);
         menu.Items.Add(monitorMenu);
 
-        // Output device picker — enumerated lazily each time the menu opens
-        // so newly-plugged devices show up without restarting the app.
         var outputMenu = new MenuFlyoutSubItem { Text = "Sound output" };
         Style(outputMenu);
         var devices = SoundEngine.EnumerateDevices();
@@ -350,7 +354,6 @@ public partial class App : Application
                 Sound.SetOutputDeviceByName(name);
                 Settings.OutputDeviceName = name;
                 Settings.Save();
-                if (_trayIcon is not null) _trayIcon.ContextFlyout = BuildContextMenu();
             };
             Style(item);
             outputMenu.Items.Add(item);
@@ -399,18 +402,7 @@ public partial class App : Application
         var openLog = new MenuFlyoutItem { Text = "Open log file" };
         openLog.Click += (_, _) =>
         {
-            try
-            {
-                if (System.IO.File.Exists(Logger.LogPath))
-                {
-                    Process.Start(new ProcessStartInfo(Logger.LogPath) { UseShellExecute = true });
-                }
-                else
-                {
-                    Logger.Info("Open log clicked before any log entries existed.");
-                    Process.Start(new ProcessStartInfo(Logger.LogPath) { UseShellExecute = true });
-                }
-            }
+            try { Process.Start(new ProcessStartInfo(Logger.LogPath) { UseShellExecute = true }); }
             catch (Exception ex) { Logger.Warn($"Open log failed: {ex.Message}"); }
         };
         Style(openLog);
@@ -418,7 +410,6 @@ public partial class App : Application
 
         var sep3 = new MenuFlyoutSeparator(); Style(sep3); menu.Items.Add(sep3);
 
-        // Read-only version readout.
         var versionItem = new MenuFlyoutItem
         {
             Text = $"Version {UpdateChecker.CurrentVersion}",
@@ -439,30 +430,68 @@ public partial class App : Application
         return menu;
     }
 
+    private void OnTrayRightClick()
+    {
+        Logger.Breadcrumb("tray.rightclick");
+        try
+        {
+            if (UIQueue.HasThreadAccess) ShowContextMenuAtCursor();
+            else UIQueue.TryEnqueue(ShowContextMenuAtCursor);
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("OnTrayRightClick threw", ex);
+        }
+    }
+
+    private void ShowContextMenuAtCursor()
+    {
+        if (!_ready) return;
+        try
+        {
+            _contextMenuHost ??= new ContextMenuHost();
+            var pt = Win32Helper.GetCursorPos();
+            _contextMenuHost.ShowMenuAt(pt.X, pt.Y, BuildContextMenu());
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("ShowContextMenuAtCursor threw", ex);
+        }
+    }
+
+    // Window in which a click that finds the flyout already-hidden is treated
+    // as "the user just clicked to close" rather than "open it again". 400 ms
+    // is comfortably longer than the OS deactivation-then-click race (~10 ms)
+    // but short enough that an intentional reopen tap still works.
+    private const int ToggleGuardMs = 400;
+
     private void OnTrayLeftClick()
     {
-        bool flyoutVisibleAtClick = _flyout?.IsVisible ?? false;
-        Logger.Breadcrumb($"tray.leftclick (flyoutVisible={flyoutVisibleAtClick})");
+        // Snapshot click-time state synchronously, BEFORE any dispatch hop —
+        // this is the ground truth the user is reacting to. By the time the
+        // queued handler runs, the OS may have already deactivated the
+        // flyout (which sets _isVisible=false), so reading IsVisible inside
+        // the handler would lose the user's intent.
+        bool wasVisibleAtClick = _flyout?.WasVisibleWithin(ToggleGuardMs) ?? false;
+        Logger.Breadcrumb($"tray.leftclick (wasVisible={wasVisibleAtClick})");
         try
         {
             if (UIQueue.HasThreadAccess)
             {
-                HandleTrayLeftClick(flyoutVisibleAtClick);
+                HandleTrayLeftClick(wasVisibleAtClick);
             }
             else
             {
-                UIQueue.TryEnqueue(() => HandleTrayLeftClick(flyoutVisibleAtClick));
+                UIQueue.TryEnqueue(() => HandleTrayLeftClick(wasVisibleAtClick));
             }
         }
         catch (Exception ex)
         {
-            // Clicking the tray icon must never crash the app, but we want a
-            // breadcrumb if it ever misbehaves.
             Logger.Error("OnTrayLeftClick threw", ex);
         }
     }
 
-    private void HandleTrayLeftClick(bool flyoutVisibleAtClick)
+    private void HandleTrayLeftClick(bool wasVisibleAtClick)
     {
         if (!_ready) return;
         if (StateMachine.Phase is Phase.Alert or Phase.Break)
@@ -470,8 +499,12 @@ public partial class App : Application
             ShowOrFocusPopup();
             return;
         }
-        if (flyoutVisibleAtClick)
+        if (wasVisibleAtClick)
         {
+            // Either currently visible OR closed within the last
+            // ToggleGuardMs ms. In both cases the user's intent is "close",
+            // so HideQuiet (idempotent if already hidden — just consumes the
+            // click and avoids the auto-hide-then-reopen race).
             _flyout?.HideQuiet();
         }
         else
@@ -606,6 +639,7 @@ public partial class App : Application
         _trayIcon?.Dispose();
         _popup?.Close();
         _flyout?.Close();
+        _contextMenuHost?.Close();
         _ownerWindow?.Close();
         SingleInstance.Shutdown();
         Exit();

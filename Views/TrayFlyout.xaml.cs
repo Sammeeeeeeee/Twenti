@@ -1,7 +1,6 @@
 using System;
 using System.ComponentModel;
 using Microsoft.UI;
-using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Input;
@@ -25,20 +24,12 @@ public sealed partial class TrayFlyout : Window
     private const int LogicalWidth  = 280;
     private const int LogicalHeight = 165;
 
-    // Brief grace period right after Show() — the polling check ignores
-    // foreground state during this window so the activation churn from
-    // ShowAt + ForceForegroundWindow doesn't immediately self-dismiss us.
-    private DateTime _shownAt;
-    private static readonly TimeSpan GracePeriod = TimeSpan.FromMilliseconds(250);
-
-    // Polling timer that watches the foreground window. Replaces the previous
-    // SetWinEventHook approach — that hook fired async on a non-UI thread,
-    // and its queued auto-hide raced against the tray-click handler in too
-    // many ways to keep patching. Polling runs once on the UI thread every
-    // 200 ms while the flyout is visible: cheap, deterministic, and either
-    // hides exactly once or doesn't hide at all.
-    private DispatcherQueueTimer? _foregroundPoll;
-    private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(200);
+    // Activation handshake (ShowAt → ForceForegroundWindow) churns Activated
+    // events. Ignore Deactivated until the dust settles so we don't hide
+    // ourselves in the first 300 ms of being open.
+    private DateTime _shownAtUtc;
+    private DateTime _lastHideUtc = DateTime.MinValue;
+    private static readonly TimeSpan ShowGrace = TimeSpan.FromMilliseconds(300);
 
     public TrayFlyout()
     {
@@ -52,6 +43,12 @@ public sealed partial class TrayFlyout : Window
 
         _sm.PropertyChanged += OnStateChanged;
         Closed += OnClosed;
+        // Standard dropdown pattern: hide when the flyout loses activation.
+        // Vastly more reliable than the previous foreground-polling timer
+        // (which hid the flyout on transient focus blips and then the
+        // user's "close" click reopened it because flyoutVisible was
+        // already false).
+        Activated += OnActivated;
 
         UpdateUi();
     }
@@ -104,6 +101,17 @@ public sealed partial class TrayFlyout : Window
     /// </summary>
     public bool IsVisible => _isVisible;
 
+    /// <summary>
+    /// True if the flyout is visible OR was hidden within the last
+    /// <paramref name="ms"/> milliseconds. Used by the tray-click handler
+    /// to defeat the auto-hide-then-click race: when the user clicks the
+    /// tray to close, the OS deactivates this window before our click
+    /// handler runs, so by the time the click is processed the flyout
+    /// already says "not visible". Without this debounce we'd reopen.
+    /// </summary>
+    public bool WasVisibleWithin(int ms) =>
+        _isVisible || (DateTime.UtcNow - _lastHideUtc) < TimeSpan.FromMilliseconds(ms);
+
     public bool ToggleAt()
     {
         if (_isVisible)
@@ -144,7 +152,7 @@ public sealed partial class TrayFlyout : Window
 
         _appWindow.MoveAndResize(new RectInt32(x, y, width, height));
 
-        _shownAt = DateTime.UtcNow;
+        _shownAtUtc = DateTime.UtcNow;
         _isVisible = true;
 
         _appWindow.Show(activateWindow: true);
@@ -157,65 +165,29 @@ public sealed partial class TrayFlyout : Window
         // Take keyboard focus so 1–9 / Esc work after clicking "Custom…"
         // without the user having to click into the flyout body first.
         try { Root.Focus(FocusState.Programmatic); } catch { /* best-effort */ }
-
-        StartForegroundPoll();
     }
 
     public void HideQuiet()
     {
         if (!_isVisible) return;
         _isVisible = false;
-        StopForegroundPoll();
+        _lastHideUtc = DateTime.UtcNow;
         try { _appWindow?.Hide(); } catch { /* window may be tearing down */ }
     }
 
-    private void StartForegroundPoll()
+    private void OnActivated(object sender, WindowActivatedEventArgs args)
     {
-        var ui = (Application.Current as App)?.UIQueue;
-        if (ui is null) return;
-
-        if (_foregroundPoll is null)
-        {
-            _foregroundPoll = ui.CreateTimer();
-            _foregroundPoll.Interval = PollInterval;
-            _foregroundPoll.Tick += OnPollTick;
-        }
-        _foregroundPoll.Start();
-    }
-
-    private void StopForegroundPoll()
-    {
-        _foregroundPoll?.Stop();
-    }
-
-    private void OnPollTick(DispatcherQueueTimer sender, object args)
-    {
-        try
-        {
-            if (!_isVisible) { StopForegroundPoll(); return; }
-            // Skip while activation is still settling.
-            if (DateTime.UtcNow - _shownAt < GracePeriod) return;
-
-            IntPtr fg = Win32Helper.GetForegroundWindow();
-            // Foreground is us — fine, stay shown.
-            if (fg == _hwnd) return;
-            // Foreground is the tray (e.g. user is hovering / about to click
-            // our icon). Don't auto-hide; let the click handler decide.
-            if (Win32Helper.IsShellTrayWindow(fg)) return;
-
-            // Foreground is something else entirely — user clicked away.
-            HideQuiet();
-        }
-        catch
-        {
-            // Don't let a polling failure crash the app.
-        }
+        if (args.WindowActivationState != WindowActivationState.Deactivated) return;
+        if (!_isVisible) return;
+        // The first ~300 ms of being open is full of activation churn from
+        // ForceForegroundWindow + AttachThreadInput. Ignore Deactivated
+        // during that window so we don't self-dismiss right after opening.
+        if (DateTime.UtcNow - _shownAtUtc < ShowGrace) return;
+        HideQuiet();
     }
 
     private void OnClosed(object sender, WindowEventArgs args)
     {
-        StopForegroundPoll();
-        _foregroundPoll = null;
         _sm.PropertyChanged -= OnStateChanged;
     }
 

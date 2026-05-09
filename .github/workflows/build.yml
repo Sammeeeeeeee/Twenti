@@ -77,16 +77,15 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      # Two separate publishes for size:
-      #   1. publish\           — single-file + Brotli-compressed inner EXE.
-      #      Distributed as the standalone "portable" download.
-      #   2. publish-installer\ — single-file but inner compression OFF, so
-      #      Inno Setup's lzma2/max can compress the raw PE bytes (lzma2
-      #      beats Brotli on PE data — meaningfully smaller installer).
-      # Trim is ON in both; csproj has TrimmerRootAssembly entries to guard
-      # H.NotifyIcon's reflection-reachable helpers (see csproj comment for
-      # crash-mode background).
-      - name: Publish single-file portable (compressed for download)
+      # Single publish, used for BOTH the portable download and the installer
+      # input. We tested splitting into a compressed publish (for the portable)
+      # and an uncompressed publish (for Inno lzma2 to work on) — turns out
+      # Brotli's per-file inner compression in EnableCompressionInSingleFile
+      # beats lzma2/max applied to the assembled bundle, so the dual-publish
+      # produced a LARGER installer (~100MB vs ~60MB). One publish wins.
+      # Trim is ON; csproj has TrimmerRootAssembly entries to guard
+      # H.NotifyIcon's reflection-reachable helpers.
+      - name: Publish single-file portable
         run: dotnet publish Twenti.csproj -c Release -r win-x64 -o publish -p:PublishSingleFile=true -p:PublishTrimmed=true -p:EnableCompressionInSingleFile=true -p:Version=${{ steps.ver.outputs.version }}
 
       - name: Upload portable artifact
@@ -95,9 +94,6 @@ jobs:
           name: Twenti-portable-win-x64
           path: publish/Twenti.exe
           if-no-files-found: error
-
-      - name: Publish installer source (uncompressed for Inno lzma2)
-        run: dotnet publish Twenti.csproj -c Release -r win-x64 -o publish-installer -p:PublishSingleFile=true -p:PublishTrimmed=true -p:EnableCompressionInSingleFile=false -p:Version=${{ steps.ver.outputs.version }}
 
       - name: Compile installer (Inno Setup 6)
         shell: pwsh
@@ -109,7 +105,7 @@ jobs:
           if (-not (Test-Path $iscc)) {
             throw "ISCC.exe was not found after installation."
           }
-          & $iscc "/DAppVersion=${{ steps.ver.outputs.version }}" "/DPublishDir=..\publish-installer" installer\Twenti.iss
+          & $iscc "/DAppVersion=${{ steps.ver.outputs.version }}" installer\Twenti.iss
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
