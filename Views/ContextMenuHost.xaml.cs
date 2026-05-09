@@ -31,12 +31,25 @@ public sealed partial class ContextMenuHost : Window
     private AppWindow? _appWindow;
     private IntPtr _hwnd;
     private MenuFlyout? _currentMenu;
+    private DateTime _shownAtUtc;
+
+    // Brief window after ShowMenuAt during which we ignore Deactivated
+    // events. ForceForegroundWindow + the MenuFlyout opening its own popup
+    // both churn activation; without this grace the menu would dismiss
+    // itself in the same instant it appeared.
+    private static readonly TimeSpan ShowGrace = TimeSpan.FromMilliseconds(250);
 
     public ContextMenuHost()
     {
         InitializeComponent();
         Title = "20/20 menu host";
         ConfigureChrome();
+        // Light-dismiss: when the host window loses activation (user
+        // clicked elsewhere), close the menu. Our 1×1 transparent window
+        // can't capture clicks outside its own bounds, so MenuFlyout's
+        // built-in light-dismiss has nothing to hook — we drive it from
+        // the activation event instead.
+        Activated += OnActivated;
     }
 
     private void ConfigureChrome()
