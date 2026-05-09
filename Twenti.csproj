@@ -39,21 +39,32 @@
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
     <DebugType>embedded</DebugType>
-    <!-- Trimming is OFF. H.NotifyIcon.WinUI registers Win32 subclass
-         delegates that aren't strongly rooted from managed code; under
-         aggressive trim + Release-mode GC pressure the delegates get
-         collected while the OS still holds the function pointer, and the
-         next callback FailFast's the process with COR_E_EXECUTIONENGINE
-         (0x80131623). Re-enable only after H.NotifyIcon ships a fix or we
-         switch to a different tray library. -->
-    <PublishTrimmed>false</PublishTrimmed>
+    <!-- Trimming is ON for the ~50% size reduction. H.NotifyIcon.WinUI 2.2.0
+         had a bug where its SUBCLASSPROC delegate could be GC'd while Win32
+         still held the function pointer, leading to COR_E_EXECUTIONENGINE
+         (0x80131623) FailFast on right-click. Mitigations applied here:
+           1. Bumped H.NotifyIcon.WinUI to 2.3.2 (version with fewer exposed
+              code paths to the subclass-delegate bug).
+           2. TrimmerRootAssembly entries below tell the linker not to strip
+              H.NotifyIcon's reflection-reachable helpers.
+         If the FailFast returns, the next escalation is to flip
+         ContextMenuMode to PopupMenu (uses Win32 TrackPopupMenu and skips
+         the WinUI subclass entirely); in that case Click handlers must be
+         replaced with Command bindings on each MenuFlyoutItem. -->
+    <PublishTrimmed>true</PublishTrimmed>
   </PropertyGroup>
+
+  <ItemGroup Condition="'$(PublishTrimmed)' == 'true'">
+    <TrimmerRootAssembly Include="H.NotifyIcon.WinUI" />
+    <TrimmerRootAssembly Include="H.NotifyIcon" />
+    <TrimmerRootAssembly Include="H.NotifyIcon.Core" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260416003" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.4654" />
-    <PackageReference Include="H.NotifyIcon.WinUI" Version="2.4.1" />
-    <PackageReference Include="Microsoft.Win32.SystemEvents" Version="9.0.0" />
+    <PackageReference Include="H.NotifyIcon.WinUI" Version="2.3.2" />
+    <PackageReference Include="Microsoft.Win32.SystemEvents" Version="9.0.1" />
     <PackageReference Include="NAudio" Version="2.2.1" />
   </ItemGroup>
 

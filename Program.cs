@@ -12,6 +12,7 @@ public static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        Logger.InstallFirstChanceLogging();
         Logger.Info($"Twenti starting (v{UpdateChecker.CurrentVersion})");
 
         if (!SingleInstance.TryAcquire())

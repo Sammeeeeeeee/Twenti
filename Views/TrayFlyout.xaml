@@ -112,14 +112,15 @@
             <Border x:Name="CustomHintBox"
                     Visibility="Collapsed"
                     CornerRadius="4"
-                    Padding="8,6"
+                    Padding="8,5"
                     Background="{ThemeResource SubtleFillColorSecondaryBrush}"
                     BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"
                     BorderThickness="1">
                 <TextBlock HorizontalAlignment="Center"
-                           FontSize="11"
+                           FontSize="12"
+                           FontWeight="SemiBold"
                            Foreground="{ThemeResource TextFillColorPrimaryBrush}"
-                           Text="Press 1–9 to snooze that many minutes · Esc to cancel"/>
+                           Text="Press 1–9 · Esc"/>
             </Border>
         </Grid>
     </Grid>

@@ -260,6 +260,7 @@ public partial class App : Application
 
     private MenuFlyout BuildContextMenu()
     {
+        Logger.Breadcrumb("menu.build");
         var menu = new MenuFlyout();
         var theme = Theme.IsDark ? ElementTheme.Dark : ElementTheme.Light;
 
@@ -345,6 +346,7 @@ public partial class App : Application
             item.Click += (_, _) =>
             {
                 string? name = captured.IsDefault ? null : captured.Name;
+                Logger.Breadcrumb($"menu.click outputDevice={name ?? "<default>"}");
                 Sound.SetOutputDeviceByName(name);
                 Settings.OutputDeviceName = name;
                 Settings.Save();
@@ -440,6 +442,7 @@ public partial class App : Application
     private void OnTrayLeftClick()
     {
         bool flyoutVisibleAtClick = _flyout?.IsVisible ?? false;
+        Logger.Breadcrumb($"tray.leftclick (flyoutVisible={flyoutVisibleAtClick})");
         try
         {
             if (UIQueue.HasThreadAccess)

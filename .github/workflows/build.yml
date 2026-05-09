@@ -78,11 +78,10 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Publish single-file portable
-        # PublishTrimmed is intentionally false — see csproj comment.
-        # H.NotifyIcon.WinUI's Win32 subclass delegates get GC'd under
-        # trim, leading to COR_E_EXECUTIONENGINE FailFast on context-menu
-        # interaction.
-        run: dotnet publish Twenti.csproj -c Release -r win-x64 -o publish -p:PublishSingleFile=true -p:PublishTrimmed=false -p:EnableCompressionInSingleFile=true -p:Version=${{ steps.ver.outputs.version }}
+        # Trim is ON for the size win; csproj has TrimmerRootAssembly entries
+        # that protect H.NotifyIcon's reflection-reachable helpers from being
+        # stripped (see csproj comment for crash-mode background).
+        run: dotnet publish Twenti.csproj -c Release -r win-x64 -o publish -p:PublishSingleFile=true -p:PublishTrimmed=true -p:EnableCompressionInSingleFile=true -p:Version=${{ steps.ver.outputs.version }}
 
       - name: Upload portable artifact
         uses: actions/upload-artifact@v4

@@ -30,6 +30,45 @@ public static class Logger
         Write("ERR ", $"{message} | {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}");
     }
 
+    /// <summary>
+    /// Lightweight breadcrumb — call this at the entry/exit of any user
+    /// action. Idea: when the process FailFasts (e.g. H.NotifyIcon's
+    /// GC'd-delegate bug), every catch block is bypassed but the most
+    /// recent breadcrumb has already been flushed to disk, so we can
+    /// see what the user was doing right before the crash.
+    /// </summary>
+    public static void Breadcrumb(string action) => Write("CRMB", action);
+
+    private static int _firstChanceInstalled;
+
+    /// <summary>
+    /// Subscribe to FirstChanceException so even handled exceptions show
+    /// up in the log. Call once at startup. Throttled to avoid runaway
+    /// logging if an exception fires per tick.
+    /// </summary>
+    public static void InstallFirstChanceLogging()
+    {
+        if (Interlocked.Exchange(ref _firstChanceInstalled, 1) == 1) return;
+
+        AppDomain.CurrentDomain.FirstChanceException += (_, e) =>
+        {
+            // Skip the noise: TaskCanceledException, OperationCanceledException
+            // and the like fire on every cancelled HTTP timeout etc.
+            var ex = e.Exception;
+            if (ex is OperationCanceledException) return;
+            try
+            {
+                Write("FCE ", $"{ex.GetType().Name}: {ex.Message}");
+            }
+            catch { /* never let logging crash the app */ }
+        };
+
+        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+        {
+            try { Write("INFO", "Process exiting."); } catch { }
+        };
+    }
+
     private static void Write(string level, string message)
     {
         try

@@ -25,7 +25,6 @@ public sealed partial class TrayFlyout : Window
     private const int LogicalWidth  = 280;
     private const int LogicalHeight = 165;
 
-    // receive Activated(Deactivated) events for foreground changes to other
     // Brief grace period right after Show() — the polling check ignores
     // foreground state during this window so the activation churn from
     // ShowAt + ForceForegroundWindow doesn't immediately self-dismiss us.
