@@ -13,7 +13,11 @@
 #endif
 #define AppPublisher   "Twenti"
 #define AppExe         "Twenti.exe"
-#define PublishDir     "..\publish"
+; PublishDir is overridable from CLI: ISCC /DPublishDir=...
+; Defaults to ..\publish (matches CI's portable build path).
+#ifndef PublishDir
+  #define PublishDir   "..\publish"
+#endif
 
 [Setup]
 AppId={{B6F8C0AB-5A3D-4A6E-93C2-7AC3D9F8E120}

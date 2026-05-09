@@ -77,10 +77,16 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Publish single-file portable
-        # Trim is ON for the size win; csproj has TrimmerRootAssembly entries
-        # that protect H.NotifyIcon's reflection-reachable helpers from being
-        # stripped (see csproj comment for crash-mode background).
+      # Two separate publishes for size:
+      #   1. publish\           — single-file + Brotli-compressed inner EXE.
+      #      Distributed as the standalone "portable" download.
+      #   2. publish-installer\ — single-file but inner compression OFF, so
+      #      Inno Setup's lzma2/max can compress the raw PE bytes (lzma2
+      #      beats Brotli on PE data — meaningfully smaller installer).
+      # Trim is ON in both; csproj has TrimmerRootAssembly entries to guard
+      # H.NotifyIcon's reflection-reachable helpers (see csproj comment for
+      # crash-mode background).
+      - name: Publish single-file portable (compressed for download)
         run: dotnet publish Twenti.csproj -c Release -r win-x64 -o publish -p:PublishSingleFile=true -p:PublishTrimmed=true -p:EnableCompressionInSingleFile=true -p:Version=${{ steps.ver.outputs.version }}
 
       - name: Upload portable artifact
@@ -89,6 +95,9 @@ jobs:
           name: Twenti-portable-win-x64
           path: publish/Twenti.exe
           if-no-files-found: error
+
+      - name: Publish installer source (uncompressed for Inno lzma2)
+        run: dotnet publish Twenti.csproj -c Release -r win-x64 -o publish-installer -p:PublishSingleFile=true -p:PublishTrimmed=true -p:EnableCompressionInSingleFile=false -p:Version=${{ steps.ver.outputs.version }}
 
       - name: Compile installer (Inno Setup 6)
         shell: pwsh
@@ -100,7 +109,7 @@ jobs:
           if (-not (Test-Path $iscc)) {
             throw "ISCC.exe was not found after installation."
           }
-          & $iscc "/DAppVersion=${{ steps.ver.outputs.version }}" installer\Twenti.iss
+          & $iscc "/DAppVersion=${{ steps.ver.outputs.version }}" "/DPublishDir=..\publish-installer" installer\Twenti.iss
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4

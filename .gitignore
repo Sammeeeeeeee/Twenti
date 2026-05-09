@@ -29,3 +29,6 @@ Thumbs.db
 
 ## Claude
 .claude/
+
+## Local dev helper
+build-local.ps1

@@ -55,9 +55,10 @@
   </PropertyGroup>
 
   <ItemGroup Condition="'$(PublishTrimmed)' == 'true'">
+    <!-- Roots H.NotifyIcon's two real assemblies. There is no separate
+         "H.NotifyIcon.Core" DLL — that's a namespace inside H.NotifyIcon.dll. -->
     <TrimmerRootAssembly Include="H.NotifyIcon.WinUI" />
     <TrimmerRootAssembly Include="H.NotifyIcon" />
-    <TrimmerRootAssembly Include="H.NotifyIcon.Core" />
   </ItemGroup>
 
   <ItemGroup>
