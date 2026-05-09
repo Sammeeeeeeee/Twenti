@@ -15,6 +15,11 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: write
+      # Required for Sigstore-backed build-provenance attestations.
+      # Without id-token: write the OIDC handshake fails and the
+      # actions/attest-build-provenance step errors out.
+      id-token: write
+      attestations: write
 
     steps:
       - uses: actions/checkout@v4
@@ -23,7 +28,7 @@ jobs:
       #   1. release.published   → github.event.release.tag_name (the canonical
       #      source — what the user typed when creating the release on GitHub).
       #   2. tag push (refs/tags/v*) → github.ref_name.
-      #   3. anything else (main push, PR, manual dispatch) → csproj <Version>.
+      #   3. anything else (main push, PR, manual dispatch) → VERSION file.
       # The leading `v` is stripped so MSBuild gets a plain SemVer ("1.2.3").
       - name: Resolve build version
         id: ver
@@ -37,9 +42,11 @@ jobs:
             $v = $tag.TrimStart('v','V')
             $isRelease = 'true'
           } else {
-            [xml]$proj = Get-Content Twenti.csproj
-            $v = ($proj.Project.PropertyGroup | ForEach-Object { $_.Version } | Where-Object { $_ } | Select-Object -First 1)
-            if (-not $v) { $v = '0.0.0' }
+            if (Test-Path VERSION) {
+              $v = (Get-Content VERSION -Raw).Trim()
+            } else {
+              $v = '0.0.0'
+            }
             $tag = "v$v"
             $isRelease = 'false'
           }
@@ -71,7 +78,11 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Publish single-file portable
-        run: dotnet publish Twenti.csproj -c Release -r win-x64 -o publish -p:PublishSingleFile=true -p:PublishTrimmed=true -p:EnableCompressionInSingleFile=true -p:Version=${{ steps.ver.outputs.version }}
+        # PublishTrimmed is intentionally false — see csproj comment.
+        # H.NotifyIcon.WinUI's Win32 subclass delegates get GC'd under
+        # trim, leading to COR_E_EXECUTIONENGINE FailFast on context-menu
+        # interaction.
+        run: dotnet publish Twenti.csproj -c Release -r win-x64 -o publish -p:PublishSingleFile=true -p:PublishTrimmed=false -p:EnableCompressionInSingleFile=true -p:Version=${{ steps.ver.outputs.version }}
 
       - name: Upload portable artifact
         uses: actions/upload-artifact@v4
@@ -99,6 +110,20 @@ jobs:
           path: installer/Output/Twenti-Setup.exe
           if-no-files-found: error
 
+      # Sigstore-backed build provenance. Generates a verifiable attestation
+      # for both shipped artifacts using the workflow's GitHub-issued OIDC
+      # identity. Anyone can verify with `gh attestation verify <file>
+      # --repo Sammeeeeeeee/Twenti` to confirm the binary came from this
+      # workflow run on this commit. This is NOT Authenticode — it does not
+      # remove SmartScreen warnings — it provides supply-chain provenance.
+      - name: Attest build provenance (Sigstore)
+        if: steps.ver.outputs.isRelease == 'true'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            publish/Twenti.exe
+            installer/Output/Twenti-Setup.exe
+
       - name: Generate SHA-256 checksums
         if: steps.ver.outputs.isRelease == 'true'
         shell: pwsh
@@ -107,6 +132,13 @@ jobs:
           '```text' >> release_body.md
           Get-FileHash publish/Twenti.exe, installer/Output/Twenti-Setup.exe -Algorithm SHA256 |
             ForEach-Object { "$($_.Hash.ToLower())  $([System.IO.Path]::GetFileName($_.Path))" } >> release_body.md
+          '```' >> release_body.md
+          "" >> release_body.md
+          "### Verify build provenance" >> release_body.md
+          "Each binary above has a Sigstore-backed attestation tying it back to this workflow run. To verify, install the [GitHub CLI](https://cli.github.com/) and run:" >> release_body.md
+          '```sh' >> release_body.md
+          "gh attestation verify Twenti.exe --repo Sammeeeeeeee/Twenti" >> release_body.md
+          "gh attestation verify Twenti-Setup.exe --repo Sammeeeeeeee/Twenti" >> release_body.md
           '```' >> release_body.md
 
       - name: Publish release

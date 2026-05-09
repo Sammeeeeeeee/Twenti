@@ -1,6 +1,6 @@
-using System.Runtime.InteropServices;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
+using Twenti.Services;
 using Windows.Graphics;
 using WinRT.Interop;
 
@@ -25,18 +25,11 @@ public sealed partial class MainWindow : Window
             p.IsResizable = false;
         }
 
+        // Park the owner window off-screen at 1×1: it exists only so the tray
+        // and popup windows have a parent in the message hierarchy.
         appWindow.MoveAndResize(new RectInt32(-32000, -32000, 1, 1));
         appWindow.IsShownInSwitchers = false;
 
-        const int GWL_EXSTYLE = -20;
-        const int WS_EX_TOOLWINDOW = 0x00000080;
-        var ex = GetWindowLong(hwnd, GWL_EXSTYLE);
-        SetWindowLong(hwnd, GWL_EXSTYLE, ex | WS_EX_TOOLWINDOW);
+        Win32Helper.HideFromAltTab(hwnd);
     }
-
-    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW", SetLastError = true)]
-    private static extern int GetWindowLong(System.IntPtr hWnd, int nIndex);
-
-    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)]
-    private static extern int SetWindowLong(System.IntPtr hWnd, int nIndex, int dwNewLong);
 }

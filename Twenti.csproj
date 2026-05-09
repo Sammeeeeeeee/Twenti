@@ -19,15 +19,12 @@
     <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
     <ApplicationIcon>installer\app.ico</ApplicationIcon>
 
-    <!-- Version info embedded in the binary so:
-         (a) right-click → Properties → Details shows the right version,
-         (b) UpdateChecker's Assembly.GetName().Version is non-zero,
-         (c) the GitHub releases tag comparison actually works.
-         CI overrides <Version> from the git tag (`-p:Version=1.2.3`) so
-         this number only matters for local/dev builds. Keep it bumped in
-         lock-step with releases anyway, otherwise a locally-built EXE
-         will report a stale "newer version available". -->
-    <Version>1.1.0</Version>
+    <!-- Version info embedded in the binary. Single source of truth is the
+         VERSION file at the repo root — read here, by Inno Setup, and by CI.
+         CI overrides <Version> from the git tag (`-p:Version=1.2.3`) when
+         building a release, but every other code path (local build, manual
+         dispatch, pre-tag main pushes) derives from VERSION. -->
+    <Version>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)VERSION').Trim())</Version>
     <Product>Twenti</Product>
     <AssemblyTitle>Twenti</AssemblyTitle>
     <Company>Twenti</Company>
@@ -42,12 +39,20 @@
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
     <DebugType>embedded</DebugType>
+    <!-- Trimming is OFF. H.NotifyIcon.WinUI registers Win32 subclass
+         delegates that aren't strongly rooted from managed code; under
+         aggressive trim + Release-mode GC pressure the delegates get
+         collected while the OS still holds the function pointer, and the
+         next callback FailFast's the process with COR_E_EXECUTIONENGINE
+         (0x80131623). Re-enable only after H.NotifyIcon ships a fix or we
+         switch to a different tray library. -->
+    <PublishTrimmed>false</PublishTrimmed>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260416003" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.4654" />
-    <PackageReference Include="H.NotifyIcon.WinUI" Version="2.2.0" />
+    <PackageReference Include="H.NotifyIcon.WinUI" Version="2.4.1" />
     <PackageReference Include="Microsoft.Win32.SystemEvents" Version="9.0.0" />
     <PackageReference Include="NAudio" Version="2.2.1" />
   </ItemGroup>

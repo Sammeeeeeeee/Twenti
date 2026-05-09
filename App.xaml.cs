@@ -9,7 +9,6 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.Win32;
 using Twenti.Services;
 using Twenti.Views;
-using Windows.UI.ViewManagement;
 
 namespace Twenti;
 
@@ -34,6 +33,13 @@ public partial class App : Application
     // (Phase 2). Seeded inline in Phase 1, updated by Theme.ThemeChanged.
     private bool _isDarkCache;
 
+    // Set when an update is found. Surfaces as a top-of-context-menu
+    // "Download update vX.Y.Z" item so the click path is the menu, not the
+    // icon — no transient "click reopens release page on every tray click"
+    // hijack like the previous LeftClickCommand swap had.
+    private string? _pendingUpdateUrl;
+    private string? _pendingUpdateVersion;
+
     public App()
     {
         InitializeComponent();
@@ -56,28 +62,20 @@ public partial class App : Application
             _ownerWindow = new MainWindow();
             StateMachine = new BreakStateMachine(UIQueue);
             _iconRenderer = new TrayIconRenderer();
-            _isDarkCache = ComputeIsDarkInline();
+            _isDarkCache = ThemeListener.ComputeIsDarkStatic();
 
             var initialIcon = _iconRenderer.Render(StateMachine, _isDarkCache);
             _trayIcon = new TaskbarIcon
             {
                 Icon = initialIcon,
                 ToolTipText = StateMachine.TooltipText,
-                // SecondWindow hosts a real WinUI MenuFlyout — we need this so
-                // Click handlers and ToggleMenuFlyoutItem.IsChecked behave
-                // normally. PopupMenu mode strips the Click events.
                 ContextMenuMode = ContextMenuMode.SecondWindow,
-                // Without this, H.NotifyIcon waits ~500ms for a possible
-                // double-click before firing the single-click command.
                 NoLeftClickDelay = true,
                 LeftClickCommand = new RelayCommand(OnTrayLeftClick),
             };
             _trayIcon.ForceCreate();
 
-            // Wire icon refresh on every tick BEFORE Phase 2 — the timer keeps
-            // updating even if the menu / theme listener / sound aren't ready.
             StateMachine.PropertyChanged += (_, _) => UIQueue.TryEnqueue(RefreshTray);
-            StateMachine.Start();
 
             // === Phase 2: deferred at high priority — settings, theme,
             // sound, menu, popup wiring. The icon is already showing the real
@@ -100,40 +98,45 @@ public partial class App : Application
         {
             Settings = AppSettings.Load();
             Sound = new SoundEngine { Muted = Settings.Muted };
+            Sound.SetOutputDeviceByName(Settings.OutputDeviceName);
             Theme = new ThemeListener();
             _isDarkCache = Theme.IsDark;
+
+            // PhaseChanged must be wired before Start() so we never miss a
+            // transition (e.g. if a future config drops WorkMinutes very low).
+            StateMachine.PhaseChanged += OnPhaseChanged;
+            StateMachine.BreakCompleted += (_, _) => UIQueue.TryEnqueue(Sound.PlayBreakComplete);
+            StateMachine.Start();
 
             if (_trayIcon is not null)
             {
                 _trayIcon.ContextFlyout = BuildContextMenu();
             }
 
-            StateMachine.PhaseChanged += OnPhaseChanged;
-            StateMachine.BreakCompleted += (_, _) => UIQueue.TryEnqueue(Sound.PlayBreakComplete);
             Theme.ThemeChanged += (_, _) => UIQueue.TryEnqueue(() =>
             {
                 _isDarkCache = Theme.IsDark;
                 RefreshTray();
-                // SecondWindow ContextMenuMode hosts the menu in a separate
-                // window that doesn't inherit the app theme — rebuild so the
-                // new RequestedTheme on each item picks up the right brushes.
                 if (_trayIcon is not null) _trayIcon.ContextFlyout = BuildContextMenu();
             });
 
             SystemEvents.SessionSwitch += OnSessionSwitch;
             SystemEvents.PowerModeChanged += OnPowerModeChanged;
 
+            // Wake-on-second-instance: the running app shows a toast
+            // explaining where the icon went so users don't think the
+            // app is broken.
+            SingleInstance.StartListener(() => UIQueue.TryEnqueue(ShowAlreadyRunningToast));
+
             _ready = true;
             RefreshTray();
+            Logger.Info("Twenti ready.");
 
             // === Phase 3: lowest priority — flyout warmup, update probe.
             UIQueue.TryEnqueue(DispatcherQueuePriority.Low, OnIdleStartup);
         }
         catch (Exception ex)
         {
-            // FinishStartup running on the dispatcher queue means an
-            // exception here would bypass the Main-thread try/catch in
-            // Program.cs entirely. Surface it instead of silently dying.
             ReportFatal("Twenti failed during startup", ex);
         }
     }
@@ -147,7 +150,7 @@ public partial class App : Application
 
             if (Settings.CheckForUpdates)
             {
-                _ = Task.Delay(TimeSpan.FromSeconds(5)).ContinueWith(_ => CheckForUpdatesAsync(silentIfNone: true));
+                _ = DelayedFirstUpdateCheckAsync();
             }
         }
         catch (Exception ex)
@@ -156,21 +159,16 @@ public partial class App : Application
         }
     }
 
-    /// <summary>
-    /// Quick inline dark-mode probe for Phase 1 — same logic as
-    /// ThemeListener.ComputeIsDark, duplicated so the listener doesn't have
-    /// to be constructed before the first icon render.
-    /// </summary>
-    private static bool ComputeIsDarkInline()
+    private async Task DelayedFirstUpdateCheckAsync()
     {
         try
         {
-            var bg = new UISettings().GetColorValue(UIColorType.Background);
-            return bg.R + bg.G + bg.B < 384;
+            await Task.Delay(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            await CheckForUpdatesAsync(silentIfNone: true).ConfigureAwait(false);
         }
-        catch
+        catch (Exception ex)
         {
-            return true; // dark is the more common Windows 11 default
+            Logger.Warn($"Initial update check failed: {ex.Message}");
         }
     }
 
@@ -180,9 +178,6 @@ public partial class App : Application
     /// </summary>
     public DisplayArea GetTargetDisplayArea()
     {
-        // Settings is null until Phase 2 finishes — fall back to following
-        // the cursor (the more useful default) if a popup somehow needs to
-        // show before then.
         var pref = Settings?.Monitor ?? MonitorPreference.FollowCursor;
         return pref == MonitorPreference.MainMonitor
             ? DisplayArea.Primary
@@ -191,27 +186,53 @@ public partial class App : Application
 
     private async Task CheckForUpdatesAsync(bool silentIfNone)
     {
-        var info = await new UpdateChecker().CheckAsync().ConfigureAwait(false);
+        UpdateInfo? info;
+        try
+        {
+            info = await new UpdateChecker().CheckAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"Update check failed: {ex.Message}");
+            return;
+        }
+
         UIQueue.TryEnqueue(() =>
         {
             if (info is null)
             {
                 if (!silentIfNone) ShowToast("You're on the latest version.");
+                _pendingUpdateUrl = null;
+                _pendingUpdateVersion = null;
+                if (_trayIcon is not null) _trayIcon.ContextFlyout = BuildContextMenu();
                 return;
             }
 
             if (_trayIcon is null) return;
+
+            _pendingUpdateUrl = info.ReleaseUrl;
+            _pendingUpdateVersion = info.LatestVersion;
+            _trayIcon.ContextFlyout = BuildContextMenu();
             _trayIcon.ShowNotification(
                 title: $"Twenti {info.LatestVersion} is available",
-                message: "Click to open the release page.",
+                message: "Right-click the tray icon → \"Download update\" to open the release page.",
                 timeout: TimeSpan.FromSeconds(10));
-
-            _trayIcon.LeftClickCommand = new RelayCommand(() =>
-            {
-                _trayIcon.LeftClickCommand = new RelayCommand(OnTrayLeftClick);
-                OpenUrl(info.ReleaseUrl);
-            });
         });
+    }
+
+    private void ShowAlreadyRunningToast()
+    {
+        try
+        {
+            _trayIcon?.ShowNotification(
+                title: "Twenti is already running",
+                message: "The tray icon may be hidden. Open the system tray (^ in the taskbar) and drag Twenti onto the visible tray.",
+                timeout: TimeSpan.FromSeconds(10));
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"ShowAlreadyRunningToast failed: {ex.Message}");
+        }
     }
 
     private void ShowToast(string message)
@@ -219,10 +240,22 @@ public partial class App : Application
         _trayIcon?.ShowNotification("Twenti", message, timeout: TimeSpan.FromSeconds(4));
     }
 
+    /// <summary>
+    /// Open a URL in the default browser. Restricted to http/https — the
+    /// release URL ultimately comes from the GitHub API JSON, and we don't
+    /// want a future API quirk (or compromise) to be able to launch
+    /// arbitrary protocol handlers via the shell.
+    /// </summary>
     private static void OpenUrl(string url)
     {
-        try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); }
-        catch { /* ignore */ }
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var u)
+            || (u.Scheme != Uri.UriSchemeHttps && u.Scheme != Uri.UriSchemeHttp))
+        {
+            Logger.Warn($"OpenUrl rejected non-http(s) URL: {url}");
+            return;
+        }
+        try { Process.Start(new ProcessStartInfo(u.AbsoluteUri) { UseShellExecute = true }); }
+        catch (Exception ex) { Logger.Warn($"OpenUrl failed: {ex.Message}"); }
     }
 
     private MenuFlyout BuildContextMenu()
@@ -230,16 +263,25 @@ public partial class App : Application
         var menu = new MenuFlyout();
         var theme = Theme.IsDark ? ElementTheme.Dark : ElementTheme.Light;
 
-        // SecondWindow mode hosts the menu in a separate window that doesn't
-        // inherit the app theme, and its auto-width measurement was clipping
-        // the longer items by ~1 character. Setting RequestedTheme on each
-        // item fixes the brushes; setting MinWidth gives the host enough
-        // headroom to render the longest label ("Check for updates now").
         const double MenuMinWidth = 240;
         void Style(MenuFlyoutItemBase item)
         {
             item.RequestedTheme = theme;
             item.MinWidth = MenuMinWidth;
+        }
+
+        if (_pendingUpdateUrl is not null && _pendingUpdateVersion is not null)
+        {
+            var url = _pendingUpdateUrl;
+            var update = new MenuFlyoutItem
+            {
+                Text = $"Download update {_pendingUpdateVersion} →",
+                Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.SteelBlue),
+            };
+            update.Click += (_, _) => OpenUrl(url);
+            Style(update);
+            menu.Items.Add(update);
+            var sepUpdate = new MenuFlyoutSeparator(); Style(sepUpdate); menu.Items.Add(sepUpdate);
         }
 
         foreach (var mins in new[] { 5, 15, 30 })
@@ -283,6 +325,36 @@ public partial class App : Application
         monitorMenu.Items.Add(mainMonitor);
         menu.Items.Add(monitorMenu);
 
+        // Output device picker — enumerated lazily each time the menu opens
+        // so newly-plugged devices show up without restarting the app.
+        var outputMenu = new MenuFlyoutSubItem { Text = "Sound output" };
+        Style(outputMenu);
+        var devices = SoundEngine.EnumerateDevices();
+        string? current = Sound.CurrentDeviceName ?? Settings.OutputDeviceName;
+        foreach (var dev in devices)
+        {
+            var label = dev.IsDefault ? "System default" : dev.Name;
+            var item = new ToggleMenuFlyoutItem
+            {
+                Text = label,
+                IsChecked = dev.IsDefault
+                    ? string.IsNullOrEmpty(current)
+                    : string.Equals(current, dev.Name, StringComparison.Ordinal),
+            };
+            var captured = dev;
+            item.Click += (_, _) =>
+            {
+                string? name = captured.IsDefault ? null : captured.Name;
+                Sound.SetOutputDeviceByName(name);
+                Settings.OutputDeviceName = name;
+                Settings.Save();
+                if (_trayIcon is not null) _trayIcon.ContextFlyout = BuildContextMenu();
+            };
+            Style(item);
+            outputMenu.Items.Add(item);
+        }
+        menu.Items.Add(outputMenu);
+
         var muteItem = new ToggleMenuFlyoutItem { Text = "Mute sounds", IsChecked = Sound.Muted };
         muteItem.Click += (_, _) =>
         {
@@ -322,11 +394,29 @@ public partial class App : Application
         Style(checkNow);
         menu.Items.Add(checkNow);
 
+        var openLog = new MenuFlyoutItem { Text = "Open log file" };
+        openLog.Click += (_, _) =>
+        {
+            try
+            {
+                if (System.IO.File.Exists(Logger.LogPath))
+                {
+                    Process.Start(new ProcessStartInfo(Logger.LogPath) { UseShellExecute = true });
+                }
+                else
+                {
+                    Logger.Info("Open log clicked before any log entries existed.");
+                    Process.Start(new ProcessStartInfo(Logger.LogPath) { UseShellExecute = true });
+                }
+            }
+            catch (Exception ex) { Logger.Warn($"Open log failed: {ex.Message}"); }
+        };
+        Style(openLog);
+        menu.Items.Add(openLog);
+
         var sep3 = new MenuFlyoutSeparator(); Style(sep3); menu.Items.Add(sep3);
 
-        // Read-only version readout. Disabled so it can't be clicked, but
-        // visible in the menu — gives the user a single place to see what
-        // version of Twenti they're running.
+        // Read-only version readout.
         var versionItem = new MenuFlyoutItem
         {
             Text = $"Version {UpdateChecker.CurrentVersion}",
@@ -349,14 +439,6 @@ public partial class App : Application
 
     private void OnTrayLeftClick()
     {
-        // Capture user intent NOW, synchronously, before anything else gets
-        // a chance to flip _flyout._isVisible. The previous code called
-        // ToggleAt() inside the queued handler, which raced against the
-        // foreground hook's queued auto-hide: if the hook lambda ran first,
-        // it hid the popup, then the click's ToggleAt saw _isVisible=false
-        // and *re-opened* it — looking to the user like the click "did
-        // nothing". By snapshotting visibility here we know what the user
-        // saw and we apply the matching action regardless of queue order.
         bool flyoutVisibleAtClick = _flyout?.IsVisible ?? false;
         try
         {
@@ -369,17 +451,16 @@ public partial class App : Application
                 UIQueue.TryEnqueue(() => HandleTrayLeftClick(flyoutVisibleAtClick));
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // Swallow — clicking the tray icon must never crash the app.
+            // Clicking the tray icon must never crash the app, but we want a
+            // breadcrumb if it ever misbehaves.
+            Logger.Error("OnTrayLeftClick threw", ex);
         }
     }
 
     private void HandleTrayLeftClick(bool flyoutVisibleAtClick)
     {
-        // Phase 2 hasn't finished — swallow rather than NRE through
-        // StateMachine / Settings / _flyout. The icon is already painting
-        // the timer; the user's click will work in a beat.
         if (!_ready) return;
         if (StateMachine.Phase is Phase.Alert or Phase.Break)
         {
@@ -388,9 +469,6 @@ public partial class App : Application
         }
         if (flyoutVisibleAtClick)
         {
-            // User saw an open flyout and clicked the icon — close, full stop.
-            // HideQuiet is idempotent; if the foreground hook also hid us,
-            // this is a no-op rather than a reopen.
             _flyout?.HideQuiet();
         }
         else
@@ -398,12 +476,6 @@ public partial class App : Application
             _flyout ??= new TrayFlyout();
             _flyout.ShowAt();
         }
-    }
-
-    private void ToggleFlyout()
-    {
-        _flyout ??= new TrayFlyout();
-        _flyout.ToggleAt();
     }
 
     private void ShowFlyout()
@@ -445,18 +517,13 @@ public partial class App : Application
             }
             catch (Exception ex)
             {
-                // Phase transitions are timer-driven — let one bad transition
-                // try to throw to the unhandled-exception handler instead of
-                // killing the app, since the timer will tick again next second.
-                Debug.WriteLine($"OnPhaseChanged failed: {ex}");
+                Logger.Error("OnPhaseChanged failed", ex);
             }
         });
     }
 
     private void OnSessionSwitch(object? sender, SessionSwitchEventArgs e)
     {
-        // Lock/unlock and remote-disconnect/connect should freeze the timer
-        // — the user is away from the screen so the countdown is meaningless.
         switch (e.Reason)
         {
             case SessionSwitchReason.SessionLock:
@@ -519,10 +586,11 @@ public partial class App : Application
             _trayIcon.Icon = _iconRenderer.Render(StateMachine, _isDarkCache);
             _trayIcon.ToolTipText = StateMachine.TooltipText;
         }
-        catch
+        catch (Exception ex)
         {
             // GDI hiccups (rare) shouldn't take the whole app down; the
             // next tick will paint a fresh icon.
+            Logger.Warn($"RefreshTray failed: {ex.Message}");
         }
     }
 
@@ -536,15 +604,11 @@ public partial class App : Application
         _popup?.Close();
         _flyout?.Close();
         _ownerWindow?.Close();
+        SingleInstance.Shutdown();
         Exit();
     }
 
     // === Unhandled exception plumbing ====================================
-    // Windows App SDK doesn't surface async exceptions by default — they
-    // travel through finalizers / the dispatcher and the process just
-    // disappears with no UI feedback. Wire each path explicitly so the user
-    // gets a message box ("Twenti crashed because…") rather than the silent
-    // "thinks for a second and closes" the user reported.
 
     private void OnXamlUnhandledException(object sender, Microsoft.UI.Xaml.UnhandledExceptionEventArgs e)
     {
@@ -568,15 +632,16 @@ public partial class App : Application
 
     private static void ReportFatal(string title, Exception ex)
     {
+        Logger.Error(title, ex);
         try
         {
             const uint MB_ICONERROR = 0x00000010;
-            string body = $"{title}\n\n{ex.GetType().Name}: {ex.Message}\n\n{ex.StackTrace}";
+            string body = $"{title}\n\n{ex.GetType().Name}: {ex.Message}\n\n{ex.StackTrace}\n\nLog file:\n{Logger.LogPath}";
             MessageBoxW(IntPtr.Zero, body, "Twenti", MB_ICONERROR);
         }
         catch
         {
-            // If even the message box fails, there's nothing useful left.
+            // Last-ditch — nothing else to do.
         }
     }
 

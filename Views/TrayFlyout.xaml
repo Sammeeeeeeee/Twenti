@@ -7,7 +7,9 @@
 
     <Grid x:Name="Root"
           Background="Transparent"
-          Padding="12">
+          Padding="12"
+          KeyDown="OnKeyDown"
+          IsTabStop="True">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
@@ -79,31 +81,46 @@
                 Click="OnStartNow"
                 Content="Start break now" />
 
-        <!-- Snooze actions -->
+        <!-- Snooze actions: two buttons by default; swapped for a hint
+             label while waiting for a custom-snooze keypress. -->
         <Grid Grid.Row="3" Margin="0,6,0,0">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="6"/>
-                <ColumnDefinition Width="*"/>
-            </Grid.ColumnDefinitions>
-            <Button x:Name="Snooze5"
-                    Grid.Column="0"
-                    HorizontalAlignment="Stretch"
-                    Padding="0,5"
+            <Grid x:Name="SnoozeButtonsRow">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="6"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Button x:Name="Snooze15"
+                        Grid.Column="0"
+                        HorizontalAlignment="Stretch"
+                        Padding="0,5"
+                        CornerRadius="4"
+                        FontSize="12"
+                        FontFamily="{StaticResource AppFont}"
+                        Content="Snooze 15m"
+                        Click="OnSnooze15"/>
+                <Button x:Name="SnoozeCustom"
+                        Grid.Column="2"
+                        HorizontalAlignment="Stretch"
+                        Padding="0,5"
+                        CornerRadius="4"
+                        FontSize="12"
+                        FontFamily="{StaticResource AppFont}"
+                        Content="Custom…"
+                        Click="OnSnoozeCustom"/>
+            </Grid>
+            <Border x:Name="CustomHintBox"
+                    Visibility="Collapsed"
                     CornerRadius="4"
-                    FontSize="12"
-                    FontFamily="{StaticResource AppFont}"
-                    Content="Snooze 5m"
-                    Click="OnSnooze5"/>
-            <Button x:Name="Snooze15"
-                    Grid.Column="2"
-                    HorizontalAlignment="Stretch"
-                    Padding="0,5"
-                    CornerRadius="4"
-                    FontSize="12"
-                    FontFamily="{StaticResource AppFont}"
-                    Content="Snooze 15m"
-                    Click="OnSnooze15"/>
+                    Padding="8,6"
+                    Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                    BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"
+                    BorderThickness="1">
+                <TextBlock HorizontalAlignment="Center"
+                           FontSize="11"
+                           Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                           Text="Press 1–9 to snooze that many minutes · Esc to cancel"/>
+            </Border>
         </Grid>
     </Grid>
 </Window>

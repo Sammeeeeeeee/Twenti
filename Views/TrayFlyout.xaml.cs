@@ -1,13 +1,15 @@
 using System;
 using System.ComponentModel;
-using System.Threading.Tasks;
 using Microsoft.UI;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Twenti.Services;
 using Windows.Graphics;
 using WinRT.Interop;
+using VirtualKey = Windows.System.VirtualKey;
 
 namespace Twenti.Views;
 
@@ -23,28 +25,21 @@ public sealed partial class TrayFlyout : Window
     private const int LogicalWidth  = 280;
     private const int LogicalHeight = 165;
 
-    // Global foreground-change hook. Strong reference to the delegate keeps
-    // it pinned for the OS while we hold the function pointer.
-    //
-    // Why a global hook (SetWinEventHook) instead of WinUI's Window.Activated:
-    // a popup-style window with WS_POPUP + WS_EX_TOOLWINDOW does not reliably
     // receive Activated(Deactivated) events for foreground changes to other
-    // processes — clicks outside the flyout simply wouldn't dismiss it. The
-    // global hook fires on every foreground change in the session and is the
-    // mechanism that actually works for this window class.
-    private IntPtr _hook = IntPtr.Zero;
-    private Win32Helper.WinEventCallback? _hookProc;
-
-    // Brief grace period right after Show() — we may not be foreground yet
-    // and a stray foreground-change for the activation churn would
-    // self-dismiss us before the user even sees the flyout.
+    // Brief grace period right after Show() — the polling check ignores
+    // foreground state during this window so the activation churn from
+    // ShowAt + ForceForegroundWindow doesn't immediately self-dismiss us.
     private DateTime _shownAt;
     private static readonly TimeSpan GracePeriod = TimeSpan.FromMilliseconds(250);
 
-    // Monotonic counter incremented on every Show. Stale auto-hide callbacks
-    // queued from the previous show capture the old sequence number; if a
-    // new ShowAt has happened in between, the queued hide bails.
-    private int _showSequence;
+    // Polling timer that watches the foreground window. Replaces the previous
+    // SetWinEventHook approach — that hook fired async on a non-UI thread,
+    // and its queued auto-hide raced against the tray-click handler in too
+    // many ways to keep patching. Polling runs once on the UI thread every
+    // 200 ms while the flyout is visible: cheap, deterministic, and either
+    // hides exactly once or doesn't hide at all.
+    private DispatcherQueueTimer? _foregroundPoll;
+    private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(200);
 
     public TrayFlyout()
     {
@@ -91,7 +86,6 @@ public sealed partial class TrayFlyout : Window
     /// Pay the first-show cost up front: size and show the window fully off-screen,
     /// then hide. Forces DWM/Composition/Acrylic to fully initialise so the real
     /// first ShowAt() is instant instead of stuttering for ~half a second.
-    /// Caller decides when — at startup we defer this off the critical path.
     /// </summary>
     public void WarmUp()
     {
@@ -106,9 +100,8 @@ public sealed partial class TrayFlyout : Window
     }
 
     /// <summary>
-    /// True iff the flyout window is currently shown. Read-only snapshot so
-    /// the tray-click handler in App.xaml.cs can capture user intent at the
-    /// click instant, before any queued hide/show races change the state.
+    /// Read-only visibility snapshot — exposed so external code can know
+    /// whether the flyout is currently shown.
     /// </summary>
     public bool IsVisible => _isVisible;
 
@@ -127,11 +120,13 @@ public sealed partial class TrayFlyout : Window
     {
         if (_appWindow is null) return;
 
+        // Reset transient state — a fresh open should never inherit the
+        // "awaiting custom-snooze keypress" mode from the previous session.
+        SetCustomSnoozeMode(false);
         UpdateUi();
 
         // Different monitors can have different DPI. Compute size in the
-        // *target* monitor's physical pixels — using the source monitor's
-        // scale would clip the flyout on higher-DPI displays.
+        // *target* monitor's physical pixels.
         var target = App.Current.GetTargetDisplayArea();
         double scale = Win32Helper.GetDpiScaleForDisplayArea(target);
         _scale = scale;
@@ -142,8 +137,6 @@ public sealed partial class TrayFlyout : Window
         var workArea = target.WorkArea;
         int margin = (int)Math.Round(12 * scale);
 
-        // Clamp to the work area: on small/rotated monitors at high DPI the
-        // flyout could otherwise spill past the screen edge.
         width  = Math.Min(width,  Math.Max(1, workArea.Width  - 2 * margin));
         height = Math.Min(height, Math.Max(1, workArea.Height - 2 * margin));
 
@@ -152,11 +145,8 @@ public sealed partial class TrayFlyout : Window
 
         _appWindow.MoveAndResize(new RectInt32(x, y, width, height));
 
-        // Set timing/sequence fields BEFORE Show so any in-flight hook
-        // callbacks see the new _shownAt and skip via the grace period.
         _shownAt = DateTime.UtcNow;
         _isVisible = true;
-        unchecked { _showSequence++; }
 
         _appWindow.Show(activateWindow: true);
 
@@ -165,136 +155,68 @@ public sealed partial class TrayFlyout : Window
         try { Activate(); } catch { /* best-effort */ }
         Win32Helper.ForceForegroundWindow(_hwnd);
 
-        InstallForegroundHook();
-        ScheduleGraceRecheck();
+        // Take keyboard focus so 1–9 / Esc work after clicking "Custom…"
+        // without the user having to click into the flyout body first.
+        try { Root.Focus(FocusState.Programmatic); } catch { /* best-effort */ }
+
+        StartForegroundPoll();
     }
 
-    /// <summary>
-    /// One-shot foreground check that fires just past the grace period.
-    /// The grace window suppresses the foreground hook so spurious activation
-    /// churn during ShowAt doesn't immediately self-dismiss us — but if the
-    /// user clicks elsewhere INSIDE that window, the hook fired, the lambda
-    /// returned without hiding, and no further hook fires until something
-    /// else changes foreground. The popup then sits open behind whatever the
-    /// user is doing. This recheck closes that gap: if, just after grace
-    /// expires, the foreground isn't us and isn't the tray, hide.
-    /// </summary>
-    private void ScheduleGraceRecheck()
-    {
-        var ui = (Application.Current as App)?.UIQueue;
-        if (ui is null) return;
-        int seq = _showSequence;
-        IntPtr ownHwnd = _hwnd;
-        var delay = GracePeriod + TimeSpan.FromMilliseconds(50);
-
-        _ = Task.Delay(delay).ContinueWith(_ =>
-        {
-            ui.TryEnqueue(() =>
-            {
-                try
-                {
-                    if (_showSequence != seq) return;
-                    if (!_isVisible) return;
-                    IntPtr fg = Win32Helper.GetForegroundWindow();
-                    if (fg == ownHwnd) return;
-                    if (Win32Helper.IsShellTrayWindow(fg)) return;
-                    HideInternal(autoHide: true);
-                }
-                catch
-                {
-                    // Don't crash the app on a teardown race.
-                }
-            });
-        }, TaskScheduler.Default);
-    }
-
-    public void HideQuiet() => HideInternal(autoHide: false);
-
-    private void HideInternal(bool autoHide)
+    public void HideQuiet()
     {
         if (!_isVisible) return;
         _isVisible = false;
-        UninstallForegroundHook();
+        StopForegroundPoll();
         try { _appWindow?.Hide(); } catch { /* window may be tearing down */ }
     }
 
-    private void InstallForegroundHook()
+    private void StartForegroundPoll()
     {
-        if (_hook != IntPtr.Zero) return;
-        _hookProc = OnForegroundChanged;
-        _hook = Win32Helper.SetWinEventHook(
-            Win32Helper.EVENT_SYSTEM_FOREGROUND,
-            Win32Helper.EVENT_SYSTEM_FOREGROUND,
-            IntPtr.Zero,
-            _hookProc,
-            idProcess: 0,
-            idThread: 0,
-            dwFlags: Win32Helper.WINEVENT_OUTOFCONTEXT);
+        var ui = (Application.Current as App)?.UIQueue;
+        if (ui is null) return;
+
+        if (_foregroundPoll is null)
+        {
+            _foregroundPoll = ui.CreateTimer();
+            _foregroundPoll.Interval = PollInterval;
+            _foregroundPoll.Tick += OnPollTick;
+        }
+        _foregroundPoll.Start();
     }
 
-    private void UninstallForegroundHook()
+    private void StopForegroundPoll()
     {
-        if (_hook == IntPtr.Zero) return;
-        try { Win32Helper.UnhookWinEvent(_hook); } catch { /* ignore */ }
-        _hook = IntPtr.Zero;
-        _hookProc = null;
+        _foregroundPoll?.Stop();
     }
 
-    private void OnForegroundChanged(IntPtr hWinEventHook, uint eventType,
-        IntPtr hwnd, int idObject, int idChild, uint dwEventThread, uint dwmsEventTime)
+    private void OnPollTick(DispatcherQueueTimer sender, object args)
     {
-        // Hook fires on a non-UI thread, sometimes in storms (e.g. when the
-        // session is locking / system suspending). Keep this body ultra-cheap
-        // and bounce to the dispatcher inside a try/catch — a stray exception
-        // here propagates into CoreMessagingXP and fails-fast the whole
-        // process (seen in the wild as 0xc000027b).
         try
         {
-            var app = Application.Current as App;
-            if (app is null) return;
-            var queue = app.UIQueue;
-            if (queue is null) return;
-            var ownHwnd = _hwnd;
-            int seq = _showSequence;
+            if (!_isVisible) { StopForegroundPoll(); return; }
+            // Skip while activation is still settling.
+            if (DateTime.UtcNow - _shownAt < GracePeriod) return;
 
-            queue.TryEnqueue(() =>
-            {
-                try
-                {
-                    // A new ShowAt happened between the hook firing and this
-                    // running — leaving the lambda would kill the new popup.
-                    if (_showSequence != seq) return;
-                    if (!_isVisible) return;
-                    // The activated window IS us — we just took foreground
-                    // (e.g. via ForceForegroundWindow). Don't self-dismiss.
-                    if (hwnd == ownHwnd) return;
-                    // The activation went to the tray (Shell_TrayWnd or one
-                    // of its kin) — that means the user clicked our tray
-                    // icon, and the click handler will toggle visibility
-                    // synchronously. If we hide here, the click handler
-                    // would then see _isVisible=false and reopen us, making
-                    // the click look like it did nothing (the original
-                    // "75% of clicks don't close" report). Let the click
-                    // handler win.
-                    if (Win32Helper.IsShellTrayWindow(hwnd)) return;
-                    if (DateTime.UtcNow - _shownAt < GracePeriod) return;
-                    HideInternal(autoHide: true);
-                }
-                catch
-                {
-                    // Last-ditch swallow: failing here would crash the app.
-                }
-            });
+            IntPtr fg = Win32Helper.GetForegroundWindow();
+            // Foreground is us — fine, stay shown.
+            if (fg == _hwnd) return;
+            // Foreground is the tray (e.g. user is hovering / about to click
+            // our icon). Don't auto-hide; let the click handler decide.
+            if (Win32Helper.IsShellTrayWindow(fg)) return;
+
+            // Foreground is something else entirely — user clicked away.
+            HideQuiet();
         }
         catch
         {
-            // Same: the OS is still holding our function pointer; never throw.
+            // Don't let a polling failure crash the app.
         }
     }
 
     private void OnClosed(object sender, WindowEventArgs args)
     {
-        UninstallForegroundHook();
+        StopForegroundPoll();
+        _foregroundPoll = null;
         _sm.PropertyChanged -= OnStateChanged;
     }
 
@@ -352,15 +274,49 @@ public sealed partial class TrayFlyout : Window
         HideQuiet();
     }
 
-    private void OnSnooze5(object sender, RoutedEventArgs e)
-    {
-        _sm.Snooze(5);
-        HideQuiet();
-    }
-
     private void OnSnooze15(object sender, RoutedEventArgs e)
     {
         _sm.Snooze(15);
         HideQuiet();
+    }
+
+    private bool _awaitingCustomSnooze;
+
+    private void OnSnoozeCustom(object sender, RoutedEventArgs e)
+    {
+        SetCustomSnoozeMode(true);
+        try { Root.Focus(FocusState.Programmatic); } catch { /* best-effort */ }
+    }
+
+    private void SetCustomSnoozeMode(bool on)
+    {
+        _awaitingCustomSnooze = on;
+        SnoozeButtonsRow.Visibility = on ? Visibility.Collapsed : Visibility.Visible;
+        CustomHintBox.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void OnKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (!_awaitingCustomSnooze) return;
+
+        if (e.Key == VirtualKey.Escape)
+        {
+            SetCustomSnoozeMode(false);
+            e.Handled = true;
+            return;
+        }
+        int? minutes = e.Key switch
+        {
+            >= VirtualKey.Number1 and <= VirtualKey.Number9 => e.Key - VirtualKey.Number0,
+            >= VirtualKey.NumberPad1 and <= VirtualKey.NumberPad9 => e.Key - VirtualKey.NumberPad0,
+            _ => null,
+        };
+        if (minutes is int m)
+        {
+            _sm.Snooze(m);
+            SetCustomSnoozeMode(false);
+            HideQuiet();
+            e.Handled = true;
+        }
     }
 }

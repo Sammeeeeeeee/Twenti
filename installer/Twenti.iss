@@ -2,12 +2,14 @@
 ; Wraps the dotnet publish output into a Win11-native installer.
 
 #define AppName        "Twenti"
-; AppVersion is overridable from the CI build via `ISCC /DAppVersion=1.2.3`
-; so the installer (and Add/Remove Programs entry) matches the EXE's
-; embedded version. Local builds without an override fall back to this
-; default — keep it in sync with the csproj <Version> when releasing.
+; AppVersion is overridable from the CI build via `ISCC /DAppVersion=1.2.3`.
+; Local builds without an override read the repo-root VERSION file so the
+; installer always matches the EXE's embedded version (see csproj <Version>).
 #ifndef AppVersion
-  #define AppVersion   "1.1.0"
+  #define VersionFile FileOpen("..\VERSION")
+  #define AppVersion  Trim(FileRead(VersionFile))
+  #expr FileClose(VersionFile)
+  #undef VersionFile
 #endif
 #define AppPublisher   "Twenti"
 #define AppExe         "Twenti.exe"

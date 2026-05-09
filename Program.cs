@@ -2,23 +2,21 @@ using System;
 using System.Threading;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
+using Twenti.Services;
 using WinRT;
 
 namespace Twenti;
 
 public static class Program
 {
-    private static Mutex? _singleInstanceMutex;
-
     [STAThread]
     public static int Main(string[] args)
     {
-        // Mutex is keyed by a fixed GUID, NOT the EXE filename, so the
-        // single-instance check works whether the EXE is "Twenti.exe", a
-        // renamed copy, or run from a different folder.
-        _singleInstanceMutex = new Mutex(true, "Twenti.SingleInstance.{6c3b2a91-4fa2-4e7b-9d8c-twentiapp}", out var owned);
-        if (!owned)
+        Logger.Info($"Twenti starting (v{UpdateChecker.CurrentVersion})");
+
+        if (!SingleInstance.TryAcquire())
         {
+            Logger.Info("Another Twenti instance is running — signalled it and exiting.");
             return 0;
         }
 
@@ -41,6 +39,7 @@ public static class Program
                 }
                 catch (Exception ex)
                 {
+                    Logger.Error("Twenti failed to construct the app", ex);
                     ShowFatalError("Twenti failed to construct the app", ex);
                     Environment.Exit(1);
                 }
@@ -51,11 +50,12 @@ public static class Program
             // Outer try covers ComWrappers init / Application.Start itself —
             // these run on the Main thread before the WinAppSDK message loop
             // is up, so a normal exception here also vanishes silently.
+            Logger.Error("Twenti failed to start", ex);
             ShowFatalError("Twenti failed to start", ex);
             return 1;
         }
 
-        GC.KeepAlive(_singleInstanceMutex);
+        SingleInstance.Shutdown();
         return 0;
     }
 
@@ -64,7 +64,7 @@ public static class Program
         try
         {
             const uint MB_ICONERROR = 0x00000010;
-            string body = $"{title}\n\n{ex.GetType().Name}: {ex.Message}\n\n{ex.StackTrace}";
+            string body = $"{title}\n\n{ex.GetType().Name}: {ex.Message}\n\n{ex.StackTrace}\n\nLog file:\n{Logger.LogPath}";
             MessageBoxW(IntPtr.Zero, body, "Twenti", MB_ICONERROR);
         }
         catch

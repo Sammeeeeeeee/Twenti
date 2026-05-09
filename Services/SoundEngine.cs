@@ -6,16 +6,22 @@ using NAudio.Wave.SampleProviders;
 
 namespace Twenti.Services;
 
+public readonly record struct AudioDevice(int DeviceNumber, string Name)
+{
+    public bool IsDefault => DeviceNumber < 0;
+}
+
 public sealed class SoundEngine : IDisposable
 {
     private const int SampleRate = 44100;
     private const int Channels = 2;
 
-    private readonly WaveOutEvent _cueOut = new() { DesiredLatency = 80 };
+    private WaveOutEvent _cueOut;
     private readonly MixingSampleProvider _cueMixer;
     private WaveOutEvent? _ambientOut;
     private bool _disposed;
     private bool _cueStarted;
+    private int _deviceNumber = -1; // -1 = system default
 
     public bool Muted { get; set; }
 
@@ -28,6 +34,84 @@ public sealed class SoundEngine : IDisposable
         {
             ReadFully = true,
         };
+        _cueOut = new WaveOutEvent { DesiredLatency = 80, DeviceNumber = _deviceNumber };
+    }
+
+    /// <summary>
+    /// Enumerate available WaveOut devices. The first entry is always the
+    /// "system default" sentinel with DeviceNumber = -1.
+    /// </summary>
+    public static IReadOnlyList<AudioDevice> EnumerateDevices()
+    {
+        var list = new List<AudioDevice> { new(-1, "System default") };
+        try
+        {
+            int n = WaveOut.DeviceCount;
+            for (int i = 0; i < n; i++)
+            {
+                try
+                {
+                    var caps = WaveOut.GetCapabilities(i);
+                    list.Add(new AudioDevice(i, caps.ProductName));
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warn($"WaveOut.GetCapabilities({i}) failed: {ex.Message}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"WaveOut device enumeration failed: {ex.Message}");
+        }
+        return list;
+    }
+
+    /// <summary>
+    /// Switch the output device. Existing playback is torn down and the
+    /// next cue/ambient will route to the new device.
+    /// </summary>
+    public void SetOutputDeviceByName(string? deviceName)
+    {
+        int target = -1;
+        if (!string.IsNullOrWhiteSpace(deviceName))
+        {
+            foreach (var d in EnumerateDevices())
+            {
+                if (!d.IsDefault && string.Equals(d.Name, deviceName, StringComparison.Ordinal))
+                {
+                    target = d.DeviceNumber;
+                    break;
+                }
+            }
+            // Fall through to default if name not found (device unplugged etc.).
+        }
+        if (target == _deviceNumber) return;
+
+        _deviceNumber = target;
+        try
+        {
+            try { _cueOut.Stop(); _cueOut.Dispose(); } catch { /* swallow */ }
+            _cueOut = new WaveOutEvent { DesiredLatency = 80, DeviceNumber = _deviceNumber };
+            _cueStarted = false;
+            // Ambient is restarted lazily; if it was running, drop it — the
+            // next break will spin up a fresh provider on the new device.
+            StopAmbient();
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("SoundEngine.SetOutputDeviceByName failed", ex);
+        }
+    }
+
+    public string? CurrentDeviceName
+    {
+        get
+        {
+            if (_deviceNumber < 0) return null;
+            try { return WaveOut.GetCapabilities(_deviceNumber).ProductName; }
+            catch { return null; }
+        }
     }
 
     private void EnsureCueStarted()
@@ -39,10 +123,10 @@ public sealed class SoundEngine : IDisposable
             _cueOut.Init(_cueMixer);
             _cueOut.Play();
         }
-        catch
+        catch (Exception ex)
         {
-            // No audio device or driver issue — leave _cueStarted true so we
-            // don't keep retrying.
+            Logger.Warn($"SoundEngine cue init failed: {ex.Message}");
+            // Leave _cueStarted true so we don't keep retrying.
         }
     }
 
@@ -85,9 +169,17 @@ public sealed class SoundEngine : IDisposable
             TargetVolume = 0.22f,
             FadeInSeconds = 2.0f,
         };
-        _ambientOut = new WaveOutEvent { DesiredLatency = 200 };
-        _ambientOut.Init(src);
-        _ambientOut.Play();
+        try
+        {
+            _ambientOut = new WaveOutEvent { DesiredLatency = 200, DeviceNumber = _deviceNumber };
+            _ambientOut.Init(src);
+            _ambientOut.Play();
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"SoundEngine ambient start failed: {ex.Message}");
+            _ambientOut = null;
+        }
     }
 
     public void StopAmbient()
