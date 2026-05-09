@@ -237,6 +237,47 @@ internal static class Win32Helper
         || name == "NotifyIconOverflowWindow"
         || name == "TopLevelWindowForOverflowXamlIsland";
 
+    /// <summary>
+    /// True when clicks on this foreground window should NOT cause our
+    /// flyouts to auto-hide — own process, the legacy tray classes, or
+    /// the Win11 tray's XAML-island host. Anything else (including a
+    /// regular File Explorer window) is treated as click-away.
+    /// </summary>
+    public static bool IsFriendlyForeground(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return false;
+        if (IsShellTrayWindow(hwnd)) return true;
+
+        try
+        {
+            uint pid = 0;
+            GetWindowThreadProcessId(hwnd, ref pid);
+            if (pid == 0) return false;
+
+            uint myPid = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
+            if (pid == myPid) return true;
+
+            using var p = System.Diagnostics.Process.GetProcessById((int)pid);
+            if (!string.Equals(p.ProcessName, "explorer", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            // Explorer hosts both the tray (no titlebar, tray-ish class) and
+            // regular File Explorer windows. Only the former should be
+            // treated as friendly.
+            var cls = GetClassNameOf(hwnd);
+            return (cls != null && cls.Contains("Tray", StringComparison.OrdinalIgnoreCase))
+                || (cls != null && cls.Contains("Overflow", StringComparison.OrdinalIgnoreCase))
+                || (cls != null && cls.Contains("XamlIsland", StringComparison.OrdinalIgnoreCase));
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, ref uint lpdwProcessId);
+
     private static string? GetClassNameOf(IntPtr hwnd)
     {
         var sb = new System.Text.StringBuilder(256);

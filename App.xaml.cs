@@ -430,20 +430,6 @@ public partial class App : Application
         return menu;
     }
 
-    private void OnTrayRightClick()
-    {
-        Logger.Breadcrumb("tray.rightclick");
-        try
-        {
-            if (UIQueue.HasThreadAccess) ShowContextMenuAtCursor();
-            else UIQueue.TryEnqueue(ShowContextMenuAtCursor);
-        }
-        catch (Exception ex)
-        {
-            Logger.Error("OnTrayRightClick threw", ex);
-        }
-    }
-
     private void ShowContextMenuAtCursor()
     {
         if (!_ready) return;
@@ -459,31 +445,14 @@ public partial class App : Application
         }
     }
 
-    // Window in which a click that finds the flyout already-hidden is treated
-    // as "the user just clicked to close" rather than "open it again". 400 ms
-    // is comfortably longer than the OS deactivation-then-click race (~10 ms)
-    // but short enough that an intentional reopen tap still works.
-    private const int ToggleGuardMs = 400;
-
     private void OnTrayLeftClick()
     {
-        // Snapshot click-time state synchronously, BEFORE any dispatch hop —
-        // this is the ground truth the user is reacting to. By the time the
-        // queued handler runs, the OS may have already deactivated the
-        // flyout (which sets _isVisible=false), so reading IsVisible inside
-        // the handler would lose the user's intent.
-        bool wasVisibleAtClick = _flyout?.WasVisibleWithin(ToggleGuardMs) ?? false;
-        Logger.Breadcrumb($"tray.leftclick (wasVisible={wasVisibleAtClick})");
+        bool visibleNow = _flyout?.IsVisible ?? false;
+        Logger.Breadcrumb($"tray.leftclick (visible={visibleNow})");
         try
         {
-            if (UIQueue.HasThreadAccess)
-            {
-                HandleTrayLeftClick(wasVisibleAtClick);
-            }
-            else
-            {
-                UIQueue.TryEnqueue(() => HandleTrayLeftClick(wasVisibleAtClick));
-            }
+            if (UIQueue.HasThreadAccess) HandleTrayLeftClick(visibleNow);
+            else UIQueue.TryEnqueue(() => HandleTrayLeftClick(visibleNow));
         }
         catch (Exception ex)
         {
@@ -491,7 +460,21 @@ public partial class App : Application
         }
     }
 
-    private void HandleTrayLeftClick(bool wasVisibleAtClick)
+    private void OnTrayRightClick()
+    {
+        Logger.Breadcrumb("tray.rightclick");
+        try
+        {
+            if (UIQueue.HasThreadAccess) ShowContextMenuAtCursor();
+            else UIQueue.TryEnqueue(ShowContextMenuAtCursor);
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("OnTrayRightClick threw", ex);
+        }
+    }
+
+    private void HandleTrayLeftClick(bool visibleAtClick)
     {
         if (!_ready) return;
         if (StateMachine.Phase is Phase.Alert or Phase.Break)
@@ -499,14 +482,7 @@ public partial class App : Application
             ShowOrFocusPopup();
             return;
         }
-        if (wasVisibleAtClick)
-        {
-            // Either currently visible OR closed within the last
-            // ToggleGuardMs ms. In both cases the user's intent is "close",
-            // so HideQuiet (idempotent if already hidden — just consumes the
-            // click and avoids the auto-hide-then-reopen race).
-            _flyout?.HideQuiet();
-        }
+        if (visibleAtClick) _flyout?.HideQuiet();
         else
         {
             _flyout ??= new TrayFlyout();

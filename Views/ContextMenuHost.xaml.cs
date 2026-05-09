@@ -1,5 +1,6 @@
 using System;
 using Microsoft.UI;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -31,25 +32,24 @@ public sealed partial class ContextMenuHost : Window
     private AppWindow? _appWindow;
     private IntPtr _hwnd;
     private MenuFlyout? _currentMenu;
-    private DateTime _shownAtUtc;
+    private DateTime _shownAt;
 
-    // Brief window after ShowMenuAt during which we ignore Deactivated
-    // events. ForceForegroundWindow + the MenuFlyout opening its own popup
-    // both churn activation; without this grace the menu would dismiss
-    // itself in the same instant it appeared.
-    private static readonly TimeSpan ShowGrace = TimeSpan.FromMilliseconds(250);
+    // Brief grace right after open: the MenuFlyout's own popup briefly
+    // takes activation, which would otherwise trigger our auto-dismiss.
+    private static readonly TimeSpan GracePeriod = TimeSpan.FromMilliseconds(250);
+
+    // Same polling pattern as TrayFlyout. WinUI 3's Activated event does
+    // not fire reliably on borderless WS_POPUP windows, so we watch the
+    // foreground window manually and close when it's not us / not the
+    // tray.
+    private DispatcherQueueTimer? _foregroundPoll;
+    private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(150);
 
     public ContextMenuHost()
     {
         InitializeComponent();
         Title = "20/20 menu host";
         ConfigureChrome();
-        // Light-dismiss: when the host window loses activation (user
-        // clicked elsewhere), close the menu. Our 1×1 transparent window
-        // can't capture clicks outside its own bounds, so MenuFlyout's
-        // built-in light-dismiss has nothing to hook — we drive it from
-        // the activation event instead.
-        Activated += OnActivated;
     }
 
     private void ConfigureChrome()
@@ -82,18 +82,13 @@ public sealed partial class ContextMenuHost : Window
     {
         if (_appWindow is null) return;
 
-        // Park the host at the cursor, sized just large enough that
-        // WinUI can compute a placement target — actual menu visuals
-        // come from the MenuFlyout's own popup chrome.
         _appWindow.MoveAndResize(new RectInt32(screenX, screenY, 1, 1));
+        _shownAt = DateTime.UtcNow;
         _appWindow.Show(activateWindow: true);
 
         try { Activate(); } catch { /* best-effort */ }
         Win32Helper.ForceForegroundWindow(_hwnd);
 
-        // Hide the host the moment the user dismisses or selects from
-        // the menu. We also detach the handler so a stale reference
-        // doesn't keep a captured menu alive.
         if (_currentMenu is not null)
         {
             try { _currentMenu.Closed -= OnMenuClosed; } catch { /* swallow */ }
@@ -109,6 +104,46 @@ public sealed partial class ContextMenuHost : Window
         {
             Logger.Warn($"ContextMenuHost.ShowMenuAt failed: {ex.Message}");
             HideHost();
+            return;
+        }
+
+        StartForegroundPoll();
+    }
+
+    private void StartForegroundPoll()
+    {
+        var ui = (Application.Current as App)?.UIQueue;
+        if (ui is null) return;
+        if (_foregroundPoll is null)
+        {
+            _foregroundPoll = ui.CreateTimer();
+            _foregroundPoll.Interval = PollInterval;
+            _foregroundPoll.Tick += OnPollTick;
+        }
+        _foregroundPoll.Start();
+    }
+
+    private void StopForegroundPoll() => _foregroundPoll?.Stop();
+
+    private void OnPollTick(DispatcherQueueTimer sender, object args)
+    {
+        try
+        {
+            if (_currentMenu is null) { StopForegroundPoll(); return; }
+            if (DateTime.UtcNow - _shownAt < GracePeriod) return;
+
+            IntPtr fg = Win32Helper.GetForegroundWindow();
+            if (fg == _hwnd) return;
+            if (Win32Helper.IsFriendlyForeground(fg)) return;
+
+            // User clicked elsewhere — dismiss the menu, which routes
+            // through OnMenuClosed and hides the host.
+            try { _currentMenu.Hide(); }
+            catch { HideHost(); }
+        }
+        catch
+        {
+            // Polling failure must never crash the app.
         }
     }
 
@@ -119,6 +154,7 @@ public sealed partial class ContextMenuHost : Window
             try { mf.Closed -= OnMenuClosed; } catch { /* swallow */ }
         }
         _currentMenu = null;
+        StopForegroundPoll();
         HideHost();
     }
 
