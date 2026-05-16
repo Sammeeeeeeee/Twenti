@@ -1,14 +1,21 @@
 using System;
 using System.Collections.Generic;
+using NAudio.CoreAudioApi;
 using NAudio.Dsp;
 using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
 
 namespace Twenti.Services;
 
-public readonly record struct AudioDevice(int DeviceNumber, string Name)
+public readonly record struct AudioDevice(int DeviceNumber, string Name, string? DisplayName = null)
 {
     public bool IsDefault => DeviceNumber < 0;
+    /// <summary>
+    /// Full friendly name from the Core Audio API when available, else the
+    /// (potentially Windows-truncated) WaveOut name. Use this for UI labels;
+    /// use <see cref="Name"/> for settings round-trips.
+    /// </summary>
+    public string Display => DisplayName ?? Name;
 }
 
 public sealed class SoundEngine : IDisposable
@@ -23,7 +30,21 @@ public sealed class SoundEngine : IDisposable
     private bool _cueStarted;
     private int _deviceNumber = -1; // -1 = system default
 
-    public bool Muted { get; set; }
+    private bool _muted;
+    public bool Muted
+    {
+        get => _muted;
+        set
+        {
+            _muted = value;
+            if (!value) return;
+            // Killing in-flight sound the instant the user mutes — otherwise
+            // they'd hear the rest of the current cue or ambient bed play out,
+            // which defeats the point of the toggle.
+            StopAmbient();
+            try { _cueMixer.RemoveAllMixerInputs(); } catch { /* swallow */ }
+        }
+    }
 
     public SoundEngine()
     {
@@ -39,11 +60,15 @@ public sealed class SoundEngine : IDisposable
 
     /// <summary>
     /// Enumerate available WaveOut devices. The first entry is always the
-    /// "system default" sentinel with DeviceNumber = -1.
+    /// "system default" sentinel with DeviceNumber = -1. We use WaveOut as
+    /// the source of truth (it owns the device-number we route through),
+    /// then look up each device's full friendly name via the Core Audio
+    /// API so the UI doesn't display Windows's 31-char MAXPNAMELEN cap.
     /// </summary>
     public static IReadOnlyList<AudioDevice> EnumerateDevices()
     {
         var list = new List<AudioDevice> { new(-1, "System default") };
+        var fullNames = TryGetMMDeviceFriendlyNames();
         try
         {
             int n = WaveOut.DeviceCount;
@@ -52,7 +77,9 @@ public sealed class SoundEngine : IDisposable
                 try
                 {
                     var caps = WaveOut.GetCapabilities(i);
-                    list.Add(new AudioDevice(i, caps.ProductName));
+                    var truncated = caps.ProductName;
+                    var display = ResolveFullName(truncated, fullNames);
+                    list.Add(new AudioDevice(i, truncated, display));
                 }
                 catch (Exception ex)
                 {
@@ -65,6 +92,40 @@ public sealed class SoundEngine : IDisposable
             Logger.Warn($"WaveOut device enumeration failed: {ex.Message}");
         }
         return list;
+    }
+
+    private static List<string> TryGetMMDeviceFriendlyNames()
+    {
+        var names = new List<string>();
+        try
+        {
+            using var enumerator = new MMDeviceEnumerator();
+            foreach (var d in enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active))
+            {
+                try { names.Add(d.FriendlyName); }
+                catch { /* skip */ }
+                finally { try { d.Dispose(); } catch { } }
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"MMDevice enumeration failed: {ex.Message}");
+        }
+        return names;
+    }
+
+    private static string ResolveFullName(string truncated, List<string> fullNames)
+    {
+        // WaveOut caps ProductName at MAXPNAMELEN (32 chars including the
+        // null terminator = 31 visible). If we're under that, the name
+        // wasn't truncated — return as-is.
+        if (truncated.Length < 31) return truncated;
+        foreach (var n in fullNames)
+        {
+            if (n.StartsWith(truncated, StringComparison.Ordinal))
+                return n;
+        }
+        return truncated;
     }
 
     /// <summary>

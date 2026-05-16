@@ -156,6 +156,9 @@ public partial class App : Application
             _flyout = new TrayFlyout();
             _flyout.WarmUp();
 
+            _contextMenuHost ??= new ContextMenuHost();
+            _contextMenuHost.WarmUp();
+
             if (Settings.CheckForUpdates)
             {
                 _ = DelayedFirstUpdateCheckAsync();
@@ -336,9 +339,18 @@ public partial class App : Application
         Style(outputMenu);
         var devices = SoundEngine.EnumerateDevices();
         string? current = Sound.CurrentDeviceName ?? Settings.OutputDeviceName;
+        // Cap at ~38 chars so the submenu doesn't stretch absurdly wide on
+        // devices with long friendly names. The dev.Display already comes
+        // from the Core Audio API (un-truncated by Windows), so anything
+        // beyond this cap is a real "I want to know but don't need to read
+        // all of it" case — exactly when "…" is the right call.
+        const int MaxDeviceLabel = 38;
         foreach (var dev in devices)
         {
-            var label = dev.IsDefault ? "System default" : dev.Name;
+            var rawLabel = dev.IsDefault ? "System default" : dev.Display;
+            var label = rawLabel.Length > MaxDeviceLabel
+                ? rawLabel[..(MaxDeviceLabel - 1)] + "…"
+                : rawLabel;
             var item = new ToggleMenuFlyoutItem
             {
                 Text = label,

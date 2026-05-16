@@ -232,8 +232,8 @@ public sealed partial class TrayFlyout : Window
                                : isBreak ? Math.Max(_sm.CurrentBreakTotalSec, 1)
                                : Math.Max(_sm.WorkTotalSec, 1);
 
-        LabelText.Text = snoozed ? "Snoozed — resumes in"
-                       : isBreak ? "Break time!"
+        LabelText.Text = snoozed ? "Snoozed for:"
+                       : isBreak ? (_sm.IsLongBreak ? "Long break" : "Eye break")
                        : "Next break in";
 
         TimeText.Text = FormatTime(leftSec);

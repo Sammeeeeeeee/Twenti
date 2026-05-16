@@ -3,7 +3,8 @@
     x:Class="Twenti.Views.TrayFlyout"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:local="using:Twenti.Views">
+    xmlns:local="using:Twenti.Views"
+    xmlns:svc="using:Twenti.Services">
 
     <Grid x:Name="Root"
           Background="Transparent"
@@ -78,6 +79,7 @@
                 FontFamily="{StaticResource AppFont}"
                 FontSize="12"
                 FontWeight="SemiBold"
+                svc:HoverScale.Enabled="True"
                 Click="OnStartNow"
                 Content="Start break now" />
 
@@ -97,6 +99,7 @@
                         CornerRadius="4"
                         FontSize="12"
                         FontFamily="{StaticResource AppFont}"
+                        svc:HoverScale.Enabled="True"
                         Content="Snooze 15m"
                         Click="OnSnooze15"/>
                 <Button x:Name="SnoozeCustom"
@@ -106,6 +109,7 @@
                         CornerRadius="4"
                         FontSize="12"
                         FontFamily="{StaticResource AppFont}"
+                        svc:HoverScale.Enabled="True"
                         Content="Custom…"
                         Click="OnSnoozeCustom"/>
             </Grid>

@@ -9,6 +9,7 @@ using Twenti.Services;
 using Windows.Graphics;
 using Windows.Foundation;
 using WinRT.Interop;
+using FlyoutPlacementMode = Microsoft.UI.Xaml.Controls.Primitives.FlyoutPlacementMode;
 
 namespace Twenti.Views;
 
@@ -45,11 +46,29 @@ public sealed partial class ContextMenuHost : Window
     private DispatcherQueueTimer? _foregroundPoll;
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(150);
 
+    private bool _warmedUp;
+
     public ContextMenuHost()
     {
         InitializeComponent();
         Title = "20/20 menu host";
         ConfigureChrome();
+    }
+
+    /// <summary>
+    /// Pay the first-show cost up front: park the window off-screen and
+    /// briefly Show/Hide it so DWM / Composition finishes initialising.
+    /// Without this, the first right-click after launch positions the
+    /// menu slightly differently from subsequent clicks because the
+    /// window's first Show races with chrome configuration.
+    /// </summary>
+    public void WarmUp()
+    {
+        if (_appWindow is null || _warmedUp) return;
+        _warmedUp = true;
+        _appWindow.MoveAndResize(new RectInt32(-32000, -32000, 1, 1));
+        _appWindow.Show(activateWindow: false);
+        _appWindow.Hide();
     }
 
     private void ConfigureChrome()
@@ -73,16 +92,27 @@ public sealed partial class ContextMenuHost : Window
     }
 
     /// <summary>
-    /// Shows the menu at the given screen-pixel coordinates. The host
-    /// window is parked at that point (1×1, transparent), the
-    /// MenuFlyout is opened relative to it. WinUI auto-positions to
-    /// keep the menu on-screen.
+    /// Shows the menu pinned to the right edge of the cursor's monitor.
+    /// The host window is parked 1×1 at <c>(monitorRight − 1, cursorY)</c>
+    /// rather than at the raw cursor coordinates, because WinUI's
+    /// placement engine won't right-align a flyout against a 1-pixel
+    /// anchor sitting mid-screen (TopEdgeAlignedRight silently fails to
+    /// position and the catch below would just hide the host). Pinning
+    /// the anchor to the edge lets the proven TopEdgeAlignedLeft +
+    /// auto-shift behaviour produce the standard tray-menu placement
+    /// (right edge flush against the screen edge) without relying on any
+    /// edge-aligned placement mode.
     /// </summary>
     public void ShowMenuAt(int screenX, int screenY, MenuFlyout menu)
     {
         if (_appWindow is null) return;
 
-        _appWindow.MoveAndResize(new RectInt32(screenX, screenY, 1, 1));
+        var area = DisplayArea.GetFromPoint(
+            new PointInt32(screenX, screenY), DisplayAreaFallback.Nearest);
+        var bounds = area.OuterBounds;
+        int anchorX = bounds.X + bounds.Width - 1;
+
+        _appWindow.MoveAndResize(new RectInt32(anchorX, screenY, 1, 1));
         _shownAt = DateTime.UtcNow;
         _appWindow.Show(activateWindow: true);
 
@@ -95,6 +125,8 @@ public sealed partial class ContextMenuHost : Window
         }
         _currentMenu = menu;
         menu.Closed += OnMenuClosed;
+
+        menu.Placement = FlyoutPlacementMode.TopEdgeAlignedLeft;
 
         try
         {

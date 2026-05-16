@@ -11,6 +11,10 @@ using Twenti.Services;
 using Windows.Graphics;
 using Windows.System;
 using WinRT.Interop;
+// Disambiguate: both Microsoft.UI.Dispatching and Windows.System export
+// DispatcherQueueTimer; the WinUI 3 one is what App.UIQueue.CreateTimer()
+// returns, so alias it here and leave Windows.System.VirtualKey alone.
+using DispatcherQueueTimer = Microsoft.UI.Dispatching.DispatcherQueueTimer;
 
 namespace Twenti.Views;
 
@@ -21,11 +25,38 @@ public sealed partial class BreakPopup : Window
     private AppWindow? _appWindow;
     private IntPtr _hwnd;
     private double _scale = 1.0;
+    private DateTime _shownAt = DateTime.UtcNow;
 
     // Logical (DIP) heights tuned to each phase's content — no wasted space.
+    // Alert and timer footprints are close enough to share one constant,
+    // which avoids a noticeable resize on phase change. Both panels use
+    // a Grid with a star-sized spacer row so the action buttons stay
+    // anchored to the bottom no matter how the height is tweaked.
     private const int LogicalWidth       = 380;
-    private const int LogicalAlertHeight = 240;
-    private const int LogicalTimerHeight = 230;
+    private const int LogicalAlertHeight = 220;
+    private const int LogicalTimerHeight = 220;
+
+    // Pulse animation tuning.
+    private static readonly TimeSpan EnterAnimationGrace = TimeSpan.FromMilliseconds(280);
+    private static readonly TimeSpan PulseDuration = TimeSpan.FromMilliseconds(380);
+    private const float PulsePeakScale = 1.05f;
+
+    // Pulse animation state. Bell-curve animation driven by a 16ms tick.
+    private DispatcherQueueTimer? _pulseTimer;
+    private bool _pulseInFlight;
+    private DateTime _pulseStartTime;
+    private PointInt32 _pulseOrigPos;
+    private SizeInt32 _pulseOrigSize;
+    private int _pulseDeltaW;
+    private int _pulseDeltaH;
+    private Visual? _pulseVisual;
+
+    // Foreground watcher — Activated/Deactivated only fires on state CHANGE,
+    // so it misses every click after the first one if focus never comes back
+    // to the popup. Polling the foreground HWND catches every focus shift.
+    private DispatcherQueueTimer? _foregroundPoll;
+    private IntPtr _lastForeground;
+    private static readonly TimeSpan ForegroundPollInterval = TimeSpan.FromMilliseconds(120);
 
     public BreakPopup()
     {
@@ -38,7 +69,7 @@ public sealed partial class BreakPopup : Window
         ConfigureChrome();
 
         _sm.PropertyChanged += OnStateChanged;
-        Closed += (_, _) => _sm.PropertyChanged -= OnStateChanged;
+        Closed += OnClosed;
         Activated += OnActivatedFocus;
         Root.Loaded += (_, _) =>
         {
@@ -50,12 +81,178 @@ public sealed partial class BreakPopup : Window
         };
 
         UpdateUi();
+        StartForegroundPoll();
+    }
+
+    private void OnClosed(object sender, WindowEventArgs args)
+    {
+        _sm.PropertyChanged -= OnStateChanged;
+        StopForegroundPoll();
+        StopPulseTimer();
     }
 
     private void OnActivatedFocus(object sender, WindowActivatedEventArgs args)
     {
-        if (args.WindowActivationState == WindowActivationState.Deactivated) return;
+        if (args.WindowActivationState == WindowActivationState.Deactivated)
+        {
+            // User just clicked away (or alt-tabbed). Pulse the card so
+            // their eye is drawn back — popup is always-on-top so it's
+            // still visible, the pulse just gives it a soft attention nudge
+            // without stealing focus back (which would fight the user).
+            PulseAttention();
+            return;
+        }
         Root.Focus(FocusState.Programmatic);
+    }
+
+    private void StartForegroundPoll()
+    {
+        var ui = (Application.Current as App)?.UIQueue;
+        if (ui is null) return;
+        _foregroundPoll ??= ui.CreateTimer();
+        _foregroundPoll.Interval = ForegroundPollInterval;
+        _foregroundPoll.Tick -= OnForegroundTick;
+        _foregroundPoll.Tick += OnForegroundTick;
+        _lastForeground = Win32Helper.GetForegroundWindow();
+        _foregroundPoll.Start();
+    }
+
+    private void StopForegroundPoll()
+    {
+        if (_foregroundPoll is null) return;
+        try { _foregroundPoll.Stop(); } catch { }
+        _foregroundPoll.Tick -= OnForegroundTick;
+    }
+
+    private void OnForegroundTick(DispatcherQueueTimer sender, object args)
+    {
+        try
+        {
+            var fg = Win32Helper.GetForegroundWindow();
+            if (fg == _lastForeground) return;
+            _lastForeground = fg;
+            // Foreground changed AND it isn't us — user interacted with
+            // something else (clicked another window, hit the taskbar,
+            // alt-tabbed, opened start menu). Pulse to remind them the
+            // break popup is still waiting.
+            if (fg != _hwnd) PulseAttention();
+        }
+        catch
+        {
+            // Polling must never crash the popup.
+        }
+    }
+
+    private void PulseAttention()
+    {
+        // Don't pulse during the entry animation or another in-flight
+        // pulse — the bell curves would fight on the same window size.
+        if (DateTime.UtcNow - _shownAt < EnterAnimationGrace) return;
+        if (_pulseInFlight) return;
+        if (_appWindow is null) return;
+
+        _pulseOrigPos  = _appWindow.Position;
+        _pulseOrigSize = _appWindow.Size;
+        if (_pulseOrigSize.Width <= 0 || _pulseOrigSize.Height <= 0) return;
+
+        int peakW = (int)Math.Round(_pulseOrigSize.Width  * PulsePeakScale);
+        int peakH = (int)Math.Round(_pulseOrigSize.Height * PulsePeakScale);
+        _pulseDeltaW = peakW - _pulseOrigSize.Width;
+        _pulseDeltaH = peakH - _pulseOrigSize.Height;
+
+        // Composition scale on Root, synced to the window scale, so the
+        // XAML content visibly grows with the window instead of leaving
+        // a band of background brush around the edges.
+        try
+        {
+            _pulseVisual = ElementCompositionPreview.GetElementVisual(Root);
+            _pulseVisual.CenterPoint = new Vector3(
+                (float)(Root.ActualWidth  / 2),
+                (float)(Root.ActualHeight / 2),
+                0);
+        }
+        catch
+        {
+            _pulseVisual = null;
+        }
+
+        var ui = (Application.Current as App)?.UIQueue;
+        if (ui is null) return;
+
+        _pulseTimer ??= ui.CreateTimer();
+        _pulseTimer.Interval = TimeSpan.FromMilliseconds(16);
+        _pulseTimer.Tick -= OnPulseTick;
+        _pulseTimer.Tick += OnPulseTick;
+        _pulseStartTime = DateTime.UtcNow;
+        _pulseInFlight = true;
+        _pulseTimer.Start();
+    }
+
+    private void OnPulseTick(DispatcherQueueTimer sender, object args)
+    {
+        try
+        {
+            if (_appWindow is null) { EndPulse(); return; }
+
+            var elapsed = (DateTime.UtcNow - _pulseStartTime).TotalMilliseconds;
+            var t = Math.Clamp(elapsed / PulseDuration.TotalMilliseconds, 0, 1);
+            // sin(πt) bell — rises 0→1 by t=0.5, returns to 0 by t=1.
+            var bell = Math.Sin(Math.PI * t);
+
+            int w = _pulseOrigSize.Width  + (int)Math.Round(_pulseDeltaW * bell);
+            int h = _pulseOrigSize.Height + (int)Math.Round(_pulseDeltaH * bell);
+            // Re-center so the window grows from its center, not its top-left.
+            int x = _pulseOrigPos.X - (w - _pulseOrigSize.Width)  / 2;
+            int y = _pulseOrigPos.Y - (h - _pulseOrigSize.Height) / 2;
+            _appWindow.MoveAndResize(new RectInt32(x, y, w, h));
+
+            if (_pulseVisual is not null)
+            {
+                float s = 1.0f + (float)((PulsePeakScale - 1.0) * bell);
+                _pulseVisual.Scale = new Vector3(s, s, 1f);
+            }
+
+            if (t >= 1)
+            {
+                // Snap back to exact original — accumulated rounding error
+                // from the int-based MoveAndResize would otherwise leave the
+                // window 1–2 px off after every pulse.
+                _appWindow.MoveAndResize(new RectInt32(
+                    _pulseOrigPos.X, _pulseOrigPos.Y,
+                    _pulseOrigSize.Width, _pulseOrigSize.Height));
+                if (_pulseVisual is not null)
+                    _pulseVisual.Scale = Vector3.One;
+                EndPulse();
+                // Reclaim foreground so the next external click also
+                // registers as a foreground change. Without this, clicking
+                // the same window twice only pulses once (the foreground
+                // HWND doesn't change between the two clicks).
+                BringToFrontAndFocus();
+                _lastForeground = _hwnd;
+            }
+        }
+        catch
+        {
+            EndPulse();
+        }
+    }
+
+    private void EndPulse()
+    {
+        if (_pulseTimer is not null)
+        {
+            try { _pulseTimer.Stop(); } catch { }
+            _pulseTimer.Tick -= OnPulseTick;
+        }
+        _pulseInFlight = false;
+    }
+
+    private void StopPulseTimer()
+    {
+        if (_pulseTimer is null) return;
+        try { _pulseTimer.Stop(); } catch { }
+        _pulseTimer.Tick -= OnPulseTick;
+        _pulseInFlight = false;
     }
 
     public void BringToFrontAndFocus()
@@ -160,6 +357,9 @@ public sealed partial class BreakPopup : Window
         UpdateUi();
         if (e.PropertyName == nameof(BreakStateMachine.Phase))
         {
+            // Cancel any in-flight pulse before the phase-driven resize —
+            // the pulse's cached "original size" would otherwise be stale.
+            EndPulse();
             ResizeForCurrentPhase();
         }
     }
@@ -167,8 +367,8 @@ public sealed partial class BreakPopup : Window
     private void UpdateUi()
     {
         bool isLong = _sm.IsLongBreak;
-        TitleText.Text = isLong ? "Long break 🌿" : "Break time";
-        CycleText.Text = isLong ? "🌿" : $"{_sm.Cycle}/3";
+        TitleText.Text = isLong ? "Long break" : "Eye break";
+        CycleText.Text = $"{_sm.Cycle}/3";
 
         bool prompt = _sm.Phase == Phase.Alert;
         PromptPanel.Visibility = prompt ? Visibility.Visible : Visibility.Collapsed;
@@ -176,7 +376,6 @@ public sealed partial class BreakPopup : Window
 
         if (prompt)
         {
-            PromptHeading.Text = isLong ? "Long break time! 🌿" : "Eye break!";
             PromptBody.Text = isLong ? "Step away for 2 minutes." : "Look 20 feet away for 20 seconds.";
             StartButtonLabel.Text = isLong ? "Start 2 min" : "Start 20 sec";
 
@@ -185,7 +384,9 @@ public sealed partial class BreakPopup : Window
             double pct = 1.0 - (auto / (double)autoTotal);
             double width = Math.Max(0, Root.ActualWidth - 40);
             AutoSnoozeFill.Width = pct * width;
-            AutoSnoozeCaption.Text = $"Auto-snoozing in {auto}s · press 1–9 to snooze that many minutes";
+            AutoSnoozeCaption.Text = isLong
+                ? $"Auto-snoozing in {auto}s · 1–9 to snooze · Del to skip to 20s"
+                : $"Auto-snoozing in {auto}s · press 1–9 to snooze that many minutes";
         }
         else
         {
@@ -204,11 +405,20 @@ public sealed partial class BreakPopup : Window
             double pct = Math.Clamp((total - left) / (double)total, 0, 1);
             double width = Math.Max(0, Root.ActualWidth - 40);
             TimerFill.Width = pct * width;
+
+            // During a long-break countdown, expose the same Del → 20s
+            // shortcut that exists during the Alert phase, with the
+            // elapsed time discounted against the 20s target.
+            bool showSkip = isLong && _sm.Phase == Phase.Break;
+            SkipTimerButton.Visibility = showSkip ? Visibility.Visible : Visibility.Collapsed;
+            SkipTimerGapCol.Width = showSkip ? new GridLength(8) : new GridLength(0);
+            SkipTimerBtnCol.Width = showSkip ? new GridLength(1, GridUnitType.Star) : new GridLength(0);
         }
     }
 
     private void OnStart(object sender, RoutedEventArgs e) => _sm.StartBreak();
     private void OnSnooze(object sender, RoutedEventArgs e) => _sm.Snooze(5);
+    private void OnSkipLong(object sender, RoutedEventArgs e) => _sm.SkipLongBreak();
 
     private void OnKeyDown(object sender, KeyRoutedEventArgs e)
     {
@@ -219,6 +429,10 @@ public sealed partial class BreakPopup : Window
         {
             case VirtualKey.Enter when phase == Phase.Alert:
                 _sm.StartBreak();
+                e.Handled = true;
+                break;
+            case VirtualKey.Delete when (phase == Phase.Alert || phase == Phase.Break) && _sm.IsLongBreak:
+                _sm.SkipLongBreak();
                 e.Handled = true;
                 break;
             case VirtualKey.Escape:

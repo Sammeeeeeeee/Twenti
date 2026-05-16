@@ -59,6 +59,12 @@
          "H.NotifyIcon.Core" DLL — that's a namespace inside H.NotifyIcon.dll. -->
     <TrimmerRootAssembly Include="H.NotifyIcon.WinUI" />
     <TrimmerRootAssembly Include="H.NotifyIcon" />
+    <!-- NAudio.Wasapi hosts the Core Audio (MMDevice) types we use to fetch
+         full device friendly names. The enumerator's COM activation goes
+         through reflection (Type.GetTypeFromCLSID + Activator.CreateInstance)
+         which the trimmer otherwise strips, leaving FriendlyName lookups
+         silently returning null at runtime. -->
+    <TrimmerRootAssembly Include="NAudio.Wasapi" />
   </ItemGroup>
 
   <ItemGroup>
