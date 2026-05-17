@@ -23,6 +23,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history + tags so the release-notes step can `git log`
+          # between the previous release tag and this one to build the
+          # commit-message changelog.
+          fetch-depth: 0
+          fetch-tags: true
 
       # Resolve the build version. Order of precedence:
       #   1. release.published   → github.event.release.tag_name (the canonical
@@ -121,6 +127,7 @@ jobs:
       # workflow run on this commit. This is NOT Authenticode — it does not
       # remove SmartScreen warnings — it provides supply-chain provenance.
       - name: Attest build provenance (Sigstore)
+        id: attest
         if: steps.ver.outputs.isRelease == 'true'
         uses: actions/attest-build-provenance@v2
         with:
@@ -128,9 +135,13 @@ jobs:
             publish/Twenti.exe
             installer/Output/Twenti-Setup.exe
 
-      - name: Generate SHA-256 checksums
+      - name: Build release body
         if: steps.ver.outputs.isRelease == 'true'
         shell: pwsh
+        env:
+          ATTESTATION_URL: ${{ steps.attest.outputs.attestation-url }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.ver.outputs.tag }}
         run: |
           "### SHA-256 Checksums" > release_body.md
           '```text' >> release_body.md
@@ -138,12 +149,29 @@ jobs:
             ForEach-Object { "$($_.Hash.ToLower())  $([System.IO.Path]::GetFileName($_.Path))" } >> release_body.md
           '```' >> release_body.md
           "" >> release_body.md
-          "### Verify build provenance" >> release_body.md
-          "Each binary above has a Sigstore-backed attestation tying it back to this workflow run. To verify, install the [GitHub CLI](https://cli.github.com/) and run:" >> release_body.md
-          '```sh' >> release_body.md
-          "gh attestation verify Twenti.exe --repo Sammeeeeeeee/Twenti" >> release_body.md
-          "gh attestation verify Twenti-Setup.exe --repo Sammeeeeeeee/Twenti" >> release_body.md
-          '```' >> release_body.md
+
+          # Attestation: prefer the specific URL returned by the attest
+          # step (deep-links to this run's attestation page); fall back to
+          # the repo-wide attestations index if the output is unavailable
+          # (older action versions, etc.).
+          $attUrl = $env:ATTESTATION_URL
+          if (-not $attUrl) { $attUrl = "https://github.com/$($env:REPO)/attestations" }
+          "[Sigstore-backed attestation]($attUrl)" >> release_body.md
+          "" >> release_body.md
+
+          # Changelog: every non-merge commit between the previous release
+          # tag and this one, one per line, in the same order git log
+          # produces (newest first). Falls back to a placeholder for the
+          # first-ever release where there's no prior tag to compare to.
+          $tag = $env:TAG
+          $prevTag = (git describe --tags --abbrev=0 "$tag^" 2>$null)
+          if ($LASTEXITCODE -eq 0 -and $prevTag) {
+            "**Full Changelog**: https://github.com/$($env:REPO)/compare/$prevTag...$tag" >> release_body.md
+            "" >> release_body.md
+            git log --no-merges --format='* %s' "$prevTag..$tag" >> release_body.md
+          } else {
+            "**Initial release.**" >> release_body.md
+          }
 
       - name: Publish release
         if: steps.ver.outputs.isRelease == 'true'
@@ -155,5 +183,8 @@ jobs:
             publish/Twenti.exe
             installer/Output/Twenti-Setup.exe
           draft: false
-          generate_release_notes: true
+          # body_path supplies the full release body (checksums +
+          # attestation + commit changelog). Auto-generated notes are
+          # off so GitHub doesn't append a second PR-based list below.
+          generate_release_notes: false
           body_path: release_body.md

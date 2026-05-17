@@ -45,6 +45,7 @@ public sealed class BreakStateMachine : INotifyPropertyChanged
     private int _cycle = 1;
     private bool _prePingFired;
     private bool _longBreakSkipped;
+    private bool _manuallyTriggered;
     private TimingProfile _timing;
     private int _workMinutes = 20;
 
@@ -81,6 +82,18 @@ public sealed class BreakStateMachine : INotifyPropertyChanged
     public bool IsLongBreak => Cycle == 3 && !_longBreakSkipped;
     public int CurrentBreakTotalSec => IsLongBreak ? _timing.LongBreakSec : _timing.ShortBreakSec;
     public int WorkTotalSec => _timing.WorkSec;
+
+    /// <summary>
+    /// True when the current Alert/Break/Snoozed run was kicked off by the
+    /// user clicking "Start break now" in the flyout, rather than the work
+    /// timer running out. Lets the popup swap "Snooze" for "Cancel" — a
+    /// manually-triggered break has no work-timer slip to recover from, so
+    /// snoozing is meaningless; the right thing is to back out cleanly and
+    /// resume the same work countdown we were already in the middle of.
+    /// Cleared the moment we return to Working (whether by completion or
+    /// explicit cancel).
+    /// </summary>
+    public bool IsManuallyTriggered => _manuallyTriggered;
 
     public int WorkMinutes
     {
@@ -138,6 +151,7 @@ public sealed class BreakStateMachine : INotifyPropertyChanged
         SnoozeLeftSec = 0;
         _prePingFired = false;
         _longBreakSkipped = false;
+        _manuallyTriggered = false;
     }
 
     private void Tick()
@@ -269,7 +283,31 @@ public sealed class BreakStateMachine : INotifyPropertyChanged
     {
         BreakLeftSec = CurrentBreakTotalSec;
         AutoSnoozeLeftSec = AutoSnoozeSec;
+        _manuallyTriggered = true;
+        OnChanged(nameof(IsManuallyTriggered));
         Phase = Phase.Alert;
+    }
+
+    /// <summary>
+    /// Back out of a manually-triggered break and slot straight back into
+    /// the work countdown we were in the middle of. Unlike a snooze this
+    /// doesn't restart anything — WorkLeftSec keeps the value it had when
+    /// the user clicked "Start break now", because that countdown was
+    /// never decremented during Alert/Break. No-op if the break wasn't
+    /// manually triggered (a normal end-of-timer break has no work slip
+    /// to recover, so cancelling has no sensible target state).
+    /// </summary>
+    public void CancelBreak()
+    {
+        if (!_manuallyTriggered) return;
+        if (Phase is not (Phase.Alert or Phase.Break or Phase.Snoozed)) return;
+        _manuallyTriggered = false;
+        // Re-arm the PrePing so it can fire again if WorkLeftSec drops
+        // below the lead time after we return to Working.
+        if (WorkLeftSec > _timing.PrePingLeadSec) _prePingFired = false;
+        SnoozeLeftSec = 0;
+        OnChanged(nameof(IsManuallyTriggered));
+        Phase = Phase.Working;
     }
 
     public void Snooze(int minutes)

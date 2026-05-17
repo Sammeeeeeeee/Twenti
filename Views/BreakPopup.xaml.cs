@@ -131,11 +131,17 @@ public sealed partial class BreakPopup : Window
             var fg = Win32Helper.GetForegroundWindow();
             if (fg == _lastForeground) return;
             _lastForeground = fg;
-            // Foreground changed AND it isn't us — user interacted with
-            // something else (clicked another window, hit the taskbar,
-            // alt-tabbed, opened start menu). Pulse to remind them the
-            // break popup is still waiting.
-            if (fg != _hwnd) PulseAttention();
+            if (fg == _hwnd) return;
+            // Skip pulses (and the refocus that follows) when the user
+            // interacts with our own surfaces — the tray icon, our flyout,
+            // our context menu, our toast. Without this, every tray click
+            // while the popup is up would yank focus back from Shell_TrayWnd
+            // before the click handler could open the flyout/menu, and the
+            // user would experience the icon as unresponsive.
+            if (Win32Helper.IsFriendlyForeground(fg)) return;
+            // Real external interaction — nudge the popup so they notice
+            // it's still waiting.
+            PulseAttention();
         }
         catch
         {
@@ -374,6 +380,15 @@ public sealed partial class BreakPopup : Window
         PromptPanel.Visibility = prompt ? Visibility.Visible : Visibility.Collapsed;
         TimerPanel.Visibility  = prompt ? Visibility.Collapsed : Visibility.Visible;
 
+        // Manually-triggered breaks (flyout's "Start break now") have no
+        // work-timer slip to recover, so Snooze is meaningless — the user
+        // wants out, back into the work countdown they were already in.
+        // Flip the Snooze button to "Cancel" and re-route Esc accordingly.
+        bool cancelMode = _sm.IsManuallyTriggered;
+        string actionLabel = cancelMode ? "Cancel" : "Snooze";
+        SnoozeButtonLabel.Text = actionLabel;
+        SnoozeTimerButtonLabel.Text = actionLabel;
+
         if (prompt)
         {
             PromptBody.Text = isLong ? "Step away for 2 minutes." : "Look 20 feet away for 20 seconds.";
@@ -384,9 +399,12 @@ public sealed partial class BreakPopup : Window
             double pct = 1.0 - (auto / (double)autoTotal);
             double width = Math.Max(0, Root.ActualWidth - 40);
             AutoSnoozeFill.Width = pct * width;
+            string snoozeHint = cancelMode
+                ? "Esc to cancel · 1–9 to snooze that many minutes"
+                : "press 1–9 to snooze that many minutes";
             AutoSnoozeCaption.Text = isLong
                 ? $"Auto-snoozing in {auto}s · 1–9 to snooze · Del to skip to 20s"
-                : $"Auto-snoozing in {auto}s · press 1–9 to snooze that many minutes";
+                : $"Auto-snoozing in {auto}s · {snoozeHint}";
         }
         else
         {
@@ -417,8 +435,14 @@ public sealed partial class BreakPopup : Window
     }
 
     private void OnStart(object sender, RoutedEventArgs e) => _sm.StartBreak();
-    private void OnSnooze(object sender, RoutedEventArgs e) => _sm.Snooze(5);
+    private void OnSnoozeOrCancel(object sender, RoutedEventArgs e) => SnoozeOrCancel();
     private void OnSkipLong(object sender, RoutedEventArgs e) => _sm.SkipLongBreak();
+
+    private void SnoozeOrCancel()
+    {
+        if (_sm.IsManuallyTriggered) _sm.CancelBreak();
+        else _sm.Snooze(5);
+    }
 
     private void OnKeyDown(object sender, KeyRoutedEventArgs e)
     {
@@ -436,7 +460,7 @@ public sealed partial class BreakPopup : Window
                 e.Handled = true;
                 break;
             case VirtualKey.Escape:
-                _sm.Snooze(5);
+                SnoozeOrCancel();
                 e.Handled = true;
                 break;
             case >= VirtualKey.Number1 and <= VirtualKey.Number9:

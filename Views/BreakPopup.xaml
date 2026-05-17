@@ -107,13 +107,13 @@
                             FontFamily="{StaticResource AppFont}"
                             FontSize="13"
                             svc:HoverScale.Enabled="True"
-                            Click="OnSnooze">
+                            Click="OnSnoozeOrCancel">
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Snooze" HorizontalAlignment="Center"/>
+                            <TextBlock x:Name="SnoozeButtonLabel" Grid.Column="0" Text="Snooze" HorizontalAlignment="Center"/>
                             <Border Grid.Column="1"
                                     Margin="6,0,0,0"
                                     Padding="6,1"
@@ -208,13 +208,13 @@
                             FontFamily="{StaticResource AppFont}"
                             FontSize="13"
                             svc:HoverScale.Enabled="True"
-                            Click="OnSnooze">
+                            Click="OnSnoozeOrCancel">
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Snooze" HorizontalAlignment="Center"/>
+                            <TextBlock x:Name="SnoozeTimerButtonLabel" Grid.Column="0" Text="Snooze" HorizontalAlignment="Center"/>
                             <Border Grid.Column="1"
                                     Margin="6,0,0,0"
                                     Padding="6,1"
